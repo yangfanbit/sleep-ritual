@@ -1,0 +1,10 @@
+# 依赖（项目零依赖，保险起见）
+node_modules/
+
+# 工作区元数据（个人记忆/分析，不进仓库）
+.workbuddy/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log

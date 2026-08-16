@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "app": "sleep-ritual",
+    "kind": "seed-actions",
+    "version": 1,
+    "updatedAt": "2026-08-16",
+    "note": "原因 → 微行为。每条低成本、30 秒内可启动、不调用 AI。reasonId 对应 js/content.js 的 REASONS。"
+  },
+  "items": [
+    {
+      "id": "act_not_over",
+      "reasonId": "not_over",
+      "reason": "今天还不想结束",
+      "action": "写一句：今天已经完成了什么？写完，就算今天结束了。",
+      "type": "micro_action"
+    },
+    {
+      "id": "act_keep_scrolling",
+      "reasonId": "keep_scrolling",
+      "reason": "想继续刷手机",
+      "action": "先把手机放远 1 米，够不到就行。",
+      "type": "micro_action"
+    },
+    {
+      "id": "act_no_me_time",
+      "reasonId": "no_me_time",
+      "reason": "白天属于自己的时间太少",
+      "action": "允许自己明天留 15 分钟只做想做的事。现在先欠着，记账。",
+      "type": "micro_action"
+    },
+    {
+      "id": "act_work_unfinished",
+      "reasonId": "work_unfinished",
+      "reason": "工作 / 学习没完成",
+      "action": "写下明天第一件要做的事。写下来，它就不用在你脑子里过夜。",
+      "type": "micro_action"
+    },
+    {
+      "id": "act_bad_mood",
+      "reasonId": "bad_mood",
+      "reason": "情绪不好",
+      "action": "先把脑子里的东西写下来，然后丢掉。情绪不用解决，先放下来。",
+      "type": "micro_action"
+    },
+    {
+      "id": "act_fear_tomorrow",
+      "reasonId": "fear_tomorrow",
+      "reason": "不想面对明天",
+      "action": "写下明天最担心的一件事。写完告诉自己：今晚不解决它。",
+      "type": "micro_action"
+    },
+    {
+      "id": "act_finish_content",
+      "reasonId": "finish_content",
+      "reason": "想把这个内容看完",
+      "action": "把它收藏或记进待办，告诉自己：它跑不掉，明天可以再看。",
+      "type": "micro_action"
+    },
+    {
+      "id": "act_not_sleepy",
+      "reasonId": "not_sleepy",
+      "reason": "就是不困",
+      "action": "不困也没关系。关灯躺下，把注意力放在呼吸上，允许自己只是休息。",
+      "type": "micro_action"
+    },
+    {
+      "id": "act_other",
+      "reasonId": "other",
+      "reason": "其他",
+      "action": "不需要理由。把手机放下，就是今晚最后一件事。",
+      "type": "micro_action"
+    }
+  ]
+}

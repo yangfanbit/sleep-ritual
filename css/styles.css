@@ -1,0 +1,551 @@
+/* ============================================================
+   Sleep Ritual — styles v2（第二阶段）
+   重点：iPhone 竖屏单手操作、Safe Area、≥44px 触摸目标、
+   夜间低刺激、30s–2min 完成一次流程。
+   ============================================================ */
+
+:root {
+  /* night palette — 全链路压暗、去饱和 */
+  --bg-night: #000000;
+  --bg-night-raise: #101012;
+  --line-night: #1e1e21;
+  --text-night-dim: #5c5c61;
+  --text-night-mid: #85858b;
+  --text-night-main: #b9b9bf;
+  --accent-warm: #a8894f;        /* 压暗的暖琥珀，不刺眼 */
+  --accent-warm-deep: #6d5830;
+
+  /* morning palette — 米白纸张感 */
+  --bg-morning: #f6f2e9;
+  --bg-morning-raise: #fffdf8;
+  --line-morning: #e6e0d2;
+  --text-morning-dim: #a29a87;
+  --text-morning-mid: #7d7666;
+  --text-morning-main: #3b362c;
+  --accent-morning: #b3813c;
+
+  --radius: 14px;
+  --tap: 48px;                    /* 最小触摸目标，高于 Apple 44pt */
+  --tabbar-h: 58px;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;  /* 去掉 iOS 点击灰闪 */
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-night);
+  color: var(--text-night-main);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: none;
+}
+
+body {
+  min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+}
+
+/* 视图切换的轻微淡入（唯一保留的动画，≤600ms） */
+@keyframes view-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+#app {
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: 1.75rem 1.35rem
+    calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 1rem);
+}
+
+/* ---------- 视图 ---------- */
+
+.view { display: none; }
+.view.is-active {
+  display: block;
+  animation: view-in 600ms ease;
+}
+
+.view-light {
+  margin: -1.75rem -1.35rem 0;
+  padding: 2rem 1.35rem 2.5rem;
+  background: var(--bg-morning);
+  color: var(--text-morning-main);
+  border-radius: 0 0 var(--radius) var(--radius);
+  min-height: calc(100dvh - var(--tabbar-h) - env(safe-area-inset-bottom));
+}
+
+/* ---------- 文字 ---------- */
+
+.page-title {
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.section-title {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-night-main);
+  margin: 2.4rem 0 0;
+}
+.section-title-light { color: var(--text-morning-main); }
+
+.section-hint {
+  font-size: 0.78rem;
+  color: var(--text-night-dim);
+  margin: 0.35rem 0 0.85rem;
+}
+.view-light .section-hint { color: var(--text-morning-mid); }
+
+/* ============================================================
+   NIGHT
+   ============================================================ */
+
+.night-head { text-align: center; }
+
+.night-clock {
+  font-size: 2.1rem;              /* 时钟缩小：它是锚点不是主角 */
+  font-weight: 200;
+  letter-spacing: 0.1em;
+  color: var(--text-night-mid);
+  font-variant-numeric: tabular-nums;
+}
+.night-subline {
+  margin-top: 0.35rem;
+  font-size: 0.74rem;
+  color: var(--text-night-dim);
+  letter-spacing: 0.04em;
+}
+.dot-sep { margin: 0 0.45em; opacity: 0.5; }
+
+.night-quote {
+  margin: 2.6rem 0 0;
+  padding: 0 0.3rem;
+  font-size: 1.02rem;
+  line-height: 2;
+  color: var(--text-night-mid);
+  text-align: center;
+  border: none;
+  min-height: 3.2rem;
+}
+.night-quote .quote-source {
+  display: block;
+  margin-top: 0.7rem;
+  font-size: 0.72rem;
+  color: var(--text-night-dim);
+}
+
+/* ---------- 原因选择：大触摸目标 ---------- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+.chip {
+  min-height: var(--tap);
+  padding: 0.7rem 1.1rem;
+  font-size: 0.88rem;
+  font-family: inherit;
+  border: 1px solid var(--line-night);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-night-mid);
+  cursor: pointer;
+}
+.chip.is-on {
+  border-color: var(--accent-warm-deep);
+  color: var(--accent-warm);
+}
+
+/* ---------- 行为提示 ---------- */
+
+.behavior-tip {
+  margin-top: 1.5rem;
+  padding: 1.05rem 1.15rem;
+  background: var(--bg-night-raise);
+  border-radius: var(--radius);
+}
+.behavior-tip-label {
+  margin: 0 0 0.4rem;
+  font-size: 0.76rem;
+  color: var(--text-night-dim);
+}
+.behavior-tip-text {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.85;
+  color: var(--accent-warm);
+}
+
+/* ---------- Brain Dump ---------- */
+
+.braindump { margin-top: 2.4rem; }
+.braindump-summary {
+  min-height: var(--tap);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  cursor: pointer;
+  list-style: none;
+}
+.braindump-summary {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-night-mid);
+}
+.braindump-hint {
+  margin-top: 0.25rem;
+  font-size: 0.74rem;
+  font-weight: 400;
+  color: var(--text-night-dim);
+}
+.braindump-summary::after { content: ""; }   /* 去掉默认三角 */
+.braindump summary::-webkit-details-marker { display: none; }
+
+/* ---------- 输入 ---------- */
+
+.textarea {
+  width: 100%;
+  margin-top: 0.85rem;
+  padding: 0.9rem 1rem;
+  font-size: 16px;                /* ≥16px：防止 iOS 聚焦时自动放大页面 */
+  line-height: 1.7;
+  font-family: inherit;
+  color: var(--text-night-main);
+  background: var(--bg-night-raise);
+  border: 1px solid var(--line-night);
+  border-radius: var(--radius);
+  resize: none;
+  -webkit-appearance: none;
+}
+.textarea:focus { outline: 1px solid #333338; }
+.textarea-light {
+  background: var(--bg-morning-raise);
+  border-color: var(--line-morning);
+  color: var(--text-morning-main);
+}
+
+/* Brain Dump 丢弃的轻微淡出 */
+.fade-out {
+  transition: opacity 800ms ease;
+  opacity: 0;
+}
+
+/* ---------- 按钮 ---------- */
+
+.btn {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+  text-align: center; /* label 类按钮（如"导入 JSON"）不继承 button 的居中默认 */
+  border-radius: var(--radius);
+  border: 1px solid var(--line-night);
+  background: transparent;
+  color: var(--text-night-mid);
+  cursor: pointer;
+}
+.btn:active { opacity: 0.65; }
+
+/* 吸底"开始睡觉"：拇指热区，不用滚到底 */
+.sleep-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  padding: 0.6rem 1.35rem 0.7rem;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0%,
+    var(--bg-night) 45%
+  );
+  z-index: 5;
+}
+.sleep-bar .btn-sleep {
+  max-width: 30rem;
+  margin: 0 auto;
+  min-height: 54px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  background: var(--accent-warm);
+  border: none;
+  color: #15100a;
+}
+.btn-danger { border-color: #3d2222; color: #966; }
+.btn-small { width: auto; display: inline-block; min-height: 40px; padding: 0.5rem 1rem; font-size: 0.85rem; }
+
+/* 夜间主流程底部留白：避免内容被吸底按钮遮挡 */
+#night-flow { padding-bottom: 4.5rem; }
+
+/* ---------- 晚安终态 ---------- */
+
+.night-goodnight[hidden],
+.morning-done[hidden] { display: none; }
+
+.night-goodnight {
+  min-height: 60dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding-bottom: 3rem;
+}
+.goodnight-word {
+  margin: 0 0 1.4rem;
+  font-size: 2rem;
+  font-weight: 300;
+  letter-spacing: 0.15em;
+  color: var(--text-night-main);
+}
+.goodnight-sub {
+  margin: 0.15rem 0;
+  font-size: 0.9rem;
+  line-height: 1.9;
+  color: var(--text-night-dim);
+}
+.night-goodnight .btn-ghost {
+  width: auto;
+  margin-top: 2.2rem;
+  padding: 0.7rem 1.6rem;
+  font-size: 0.85rem;
+}
+.sleeptown-hint {
+  margin-top: 1.1rem;
+  padding: 0 1.5rem;
+  font-size: 0.75rem;
+  line-height: 1.8;
+  color: var(--text-night-dim);
+}
+
+/* ============================================================
+   MORNING
+   ============================================================ */
+
+.morning-hello {
+  margin: 0.4rem 0 1.6rem;
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-morning-main);
+}
+
+.morning-last-night { margin-bottom: 0.5rem; }
+.morning-line {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--text-morning-mid);
+  font-variant-numeric: tabular-nums;
+}
+.morning-tonight { margin-top: 1.1rem; }
+.morning-tonight-label {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-morning-dim);
+}
+.morning-tonight-message {
+  margin: 0;
+  padding: 0.75rem 0 0.75rem 0.9rem;
+  border-left: 2px solid var(--accent-morning);
+  font-size: 0.95rem;
+  line-height: 1.75;
+  color: var(--text-morning-main);
+}
+
+/* 三档状态：大触摸目标 */
+.mood-row {
+  display: flex;
+  gap: 0.7rem;
+}
+.mood {
+  flex: 1;
+  min-height: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  font-size: 1.55rem;
+  font-family: inherit;
+  background: var(--bg-morning-raise);
+  border: 1px solid var(--line-morning);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.mood span { font-size: 0.72rem; color: var(--text-morning-mid); }
+.mood.is-on {
+  border-color: var(--accent-morning);
+  background: #fdf6e8;
+}
+
+.btn-primary-light {
+  margin-top: 1.6rem;
+  min-height: 54px;
+  font-size: 1rem;
+  font-weight: 600;
+  background: var(--accent-morning);
+  border: none;
+  color: #fff;
+}
+
+/* 早晨终态：轻正反馈 */
+.morning-done {
+  min-height: 55dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+.morning-done-word {
+  margin: 0 0 0.8rem;
+  font-size: 2.2rem;
+  font-weight: 600;
+  color: var(--text-morning-main);
+}
+.morning-done-sub {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--text-morning-mid);
+}
+
+/* ============================================================
+   HISTORY / SETTINGS（本阶段不开发，仅保留可用骨架样式）
+   ============================================================ */
+
+.history-list { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
+.history-trend {
+  margin-top: 1.2rem;
+  padding: 1rem 1.15rem;
+  background: var(--bg-night-raise);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: var(--text-night-mid);
+}
+.history-item {
+  padding: 1rem 1.15rem;
+  background: var(--bg-night-raise);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  line-height: 1.8;
+  color: var(--text-night-mid);
+}
+.history-item .h-date {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-night-main);
+  font-size: 0.95rem;
+  margin-bottom: 0.3rem;
+}
+.history-item .h-delay { font-variant-numeric: tabular-nums; }
+.history-item .h-label { color: var(--text-night-dim); margin-right: 0.4em; }
+.history-item blockquote {
+  margin: 0.35rem 0;
+  padding-left: 0.7rem;
+  border-left: 2px solid #2c2c30;
+  color: var(--text-night-mid);
+}
+.empty-hint { text-align: center; color: var(--text-night-dim); margin-top: 3rem; }
+
+.field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: var(--tap);
+  margin-top: 0.6rem;
+}
+.field-label { font-size: 0.92rem; color: var(--text-night-mid); }
+input[type="time"], .input, .select {
+  padding: 0.55rem 0.8rem;
+  font-size: 16px;
+  font-family: inherit;
+  color: var(--text-night-main);
+  background: var(--bg-night-raise);
+  border: 1px solid var(--line-night);
+  border-radius: var(--radius);
+}
+.content-list { display: flex; flex-direction: column; gap: 0.6rem; }
+.content-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--bg-night-raise);
+  border-radius: var(--radius);
+  font-size: 0.83rem;
+  line-height: 1.6;
+}
+.content-row .c-type {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--accent-warm);
+  border: 1px solid #33291a;
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+}
+.content-row .c-text { flex: 1; color: var(--text-night-mid); }
+.content-row .c-del {
+  flex-shrink: 0;
+  min-width: 32px;
+  min-height: 32px;
+  background: none;
+  border: none;
+  color: var(--text-night-dim);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.content-add { margin-top: 1rem; }
+.content-add .select, .content-add .input { width: 100%; margin-top: 0.9rem; display: block; }
+.content-add .chips { margin-top: 0.6rem; }
+.content-reasons-label {
+  margin-top: 1.1rem;
+  font-size: 0.78rem;
+  color: var(--text-night-mid);
+  opacity: 0.8;
+}
+.settings-actions { display: flex; flex-direction: column; }
+
+/* ---------- 底部导航 ---------- */
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: #08080a;
+  border-top: 1px solid #151517;
+  z-index: 10;
+}
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-family: inherit;
+  background: none;
+  border: none;
+  color: var(--text-night-dim);
+  cursor: pointer;
+}
+.tab.is-active { color: var(--text-night-main); }
+
+/* 尊重系统减弱动效设置 */
+@media (prefers-reduced-motion: reduce) {
+  *, .view.is-active { animation: none !important; transition: none !important; }
+}
