@@ -327,6 +327,21 @@ body {
   line-height: 1.8;
   color: var(--text-night-dim);
 }
+.link-soft {
+  display: inline-block;
+  margin-top: 1.8rem;
+  padding: 0.5rem 0.8rem;
+  background: transparent;
+  border: 0;
+  color: var(--text-night-dim);
+  font-size: 0.78rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(255,255,255,0.15);
+}
+.link-soft:active { opacity: 0.6; }
 
 /* ============================================================
    MORNING

@@ -154,3 +154,19 @@
 **决定**：新增 `tests/mvp.test.js`：jsdom + fake-indexeddb 组合（beforeParse 注入 indexedDB 与本地 fetch），端到端验证原因→内容匹配、session 字段完整性（selectedActionId/brainDumpUsed/sleepTownAttempted/shownContentIds）、wakeAt、History 列表与趋势，17 项。
 
 **理由**：ui-smoke 在无 IndexedDB 环境跑（容错路径），新字段与匹配逻辑必须用真实存储验证。至此三套回归 db 30 + ui 17 + mvp 17 = 64 项。
+
+## D30. 晚安页跨天归日 + 手动兜底（2026-08-17）
+
+**决定**：新增 `sleepDate(d)`——将 00:00–04:00 的入睡归入前一天（阈值 `NIGHT_CUTOFF_HOUR = 4`）。`resumeNightState` 用 `sleepDate()` 判断"今睡日是否已睡"；`bindSleepButton` 写入的 `session.date` 改用 `sleepDate()`。`index.html` 晚安终态加「今晚还没睡，回到流程」按钮（`#btn-back-to-night`），`app.js` 新增 `bindBackToNightFlow()` 并在 `init()` 中绑定，重置会话状态后重走睡前流程。`sw.js` 缓存版本 v5 → v6（本次改了 app.js/index.html/css，必须清旧缓存否则已安装的 PWA 继续返回旧脚本）。
+
+**理由**：原实现用 `todayStr()` 存入睡日期，凌晨 0:15 入睡会被记为"今天"，导致第二天全天命中 `last.date === todayStr()` 一直显示晚安页，阻断用户重新进入睡前流程（即本次修复的 bug）。把凌晨前 4 小时归入前一天后，统计上"今晚"语义正确——第二天早上（>04:00）打开时 `sleepDate()` 已回到新日期，不再命中，正常显示睡前流程。手动按钮是防御性兜底：万一仍误显示晚安页，用户可一键重置重走，不依赖时间规则。
+
+**取舍**：04:00 为经验阈值，覆盖绝大多数"熬夜到凌晨才睡"的场景；此后按当天算。与 D10 一致——同一 sleepDate 多次保存仍可能产生多条记录，v1 不合并。自动规则 + 手动兜底双保险，不引入更复杂的时间戳修正。
+
+## D31. sleepDate 边界单测固化（2026-08-17）
+
+**决定**：`js/app.js` IIFE 内新增测试钩子 `window.sleepDate = sleepDate;`（生产逻辑无副作用）；新增 `tests/sleepdate.test.js`，jsdom 加载页面后断言 8 个临界用例——03:59→前一天、04:00→当天、00:00→前一天、23:59→当天、跨月末（03-01 02:00→02-28，2026 非闰年）、跨年末（01-01 03:00→上一年 12-31）、白天正常当晚、钩子已暴露。结果 8/8 通过。
+
+**理由**：本次跨天 bug 的根因正是 `sleepDate` 的日期边界算错；原 64 项测试均为端到端（db/mvp/ui-smoke），不锁定该纯函数的内部数学——若有人把阈值误改，端到端测试在常规时段仍全绿，bug 会悄悄溜回。单测把"凌晨归前一天"这条契约钉死为可自动验证的断言，防回归。钩子挂 `window` 是零构建约束下的最小改动（方案 A），不引入新模块或构建步骤。
+
+**运行**：`SR_PORT=<port> NODE_PATH=<ws>/node_modules node tests/sleepdate.test.js`（需本地服务器提供 index.html 及其 script）。至此四套回归 db 30 + mvp 17 + ui-smoke 17 + sleepdate 8 = 72 项。

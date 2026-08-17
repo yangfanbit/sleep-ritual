@@ -272,7 +272,7 @@
     $("#btn-sleep").addEventListener("click", async () => {
       const firstReason = selectedReasons.length ? selectedReasons[0] : null;
       const session = {
-        date: todayStr(),
+        date: sleepDate(),
         bedTimeTarget: await DB.getSetting("bedtime", "23:30").catch(() => "23:30"),
         shownAt: nightShownAt,
         actualSleepAt: new Date().toISOString(),
@@ -316,12 +316,30 @@
     }, 2200);
   }
 
-  /* 今天已经记录过 → 直接进入晚安终态，避免重复填写、减少停留 */
+  /* 睡眠日：把 00:00–04:00 的入睡归入前一天。
+     这样凌晨 0:15 睡觉在统计上仍算"今晚"，第二天早上也不会被晚安页挡住。 */
+  const NIGHT_CUTOFF_HOUR = 4;
+
+  function sleepDate(d = new Date()) {
+    const date = new Date(d);
+    if (date.getHours() < NIGHT_CUTOFF_HOUR) {
+      date.setDate(date.getDate() - 1);
+    }
+    return todayStr(date);
+  }
+
+  // 测试钩子：暴露纯函数供单元测试断言日期边界（对生产逻辑无副作用）
+  window.sleepDate = sleepDate;
+
+  /* 判断"今晚是否已经睡过"：
+     - 04:00 前：看 sleepDate(现在) 是否有记录
+     - 04:00 后：看 sleepDate(现在) 是否有记录（同一函数已把凌晨归入前一天）
+     午夜到 4 点之间不强制晚安，允许再次进入睡前流程。 */
   async function resumeNightState() {
     nightShownAt = new Date().toISOString();
     try {
       const last = await DB.getLatestNightSession();
-      if (last && last.date === todayStr()) {
+      if (last && last.date === sleepDate()) {
         showGoodnight();
       } else {
         showNightFlow();
@@ -329,6 +347,25 @@
     } catch (e) {
       showNightFlow();
     }
+  }
+
+  /* 晚安页手动返回待睡流程（兜底） */
+  function bindBackToNightFlow() {
+    const btn = $("#btn-back-to-night");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      // 重置当前会话状态，让用户重新走一遍睡前流程
+      selectedReasons = [];
+      brainDumpUsed = false;
+      shownTonight.clear();
+      $$("#reason-list .chip").forEach((b) => b.classList.remove("is-on"));
+      $("#tonight-message").value = "";
+      $("#braindump-input").value = "";
+      $("#sleeptown-hint").hidden = true;
+      renderNightContent();
+      renderBehaviorTip();
+      showNightFlow();
+    });
   }
 
   /* ---------- MORNING ---------- */
@@ -664,6 +701,7 @@
     renderReasonChips();
     bindBrainDump();
     bindSleepButton();
+    bindBackToNightFlow();
     bindMood();
     bindMorningSave();
     bindSettings();
