@@ -89,6 +89,13 @@ const { JSDOM } = require("jsdom");
     $("#meta-theme-color").getAttribute("content") === "#000000"
   );
 
+  // 「每日一句」点击换句：可访问属性 + 点击同步触发换句流程
+  const nc = $("#night-content");
+  check("night-content role=button", nc.getAttribute("role") === "button");
+  check("night-content tabindex=0", nc.getAttribute("tabindex") === "0");
+  nc.dispatchEvent(new window.Event("click", { bubbles: true }));
+  check("click triggers shuffle (flag set sync)", nc.dataset.shuffling === "1");
+
   let fail = 0;
   for (const [n, ok] of results) {
     console.log((ok ? "PASS" : "FAIL") + "  " + n);

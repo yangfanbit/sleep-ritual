@@ -133,12 +133,36 @@ body {
   text-align: center;
   border: none;
   min-height: 3.2rem;
+  cursor: pointer;
+  transition: opacity 0.18s ease;
+}
+.night-quote:focus-visible {
+  outline: 2px solid var(--accent-warm);
+  outline-offset: 4px;
 }
 .night-quote .quote-source {
   display: block;
   margin-top: 0.7rem;
   font-size: 0.72rem;
   color: var(--text-night-dim);
+}
+.night-quote-wrap {
+  position: relative;
+}
+.quote-hint {
+  position: absolute;
+  right: 6px;
+  bottom: -4px;
+  font-size: 0.72rem;
+  color: var(--text-night-dim);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+  user-select: none;
+}
+.night-quote-wrap:hover .quote-hint,
+.night-quote:focus-visible ~ .quote-hint {
+  opacity: 0.7;
 }
 
 /* ---------- 原因选择：大触摸目标 ---------- */

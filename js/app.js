@@ -201,6 +201,42 @@
     }
   }
 
+  /* 点击「每日一句」手动换一条——复用原因联动 + 会话去重 */
+  async function shuffleNightContent() {
+    const box = $("#night-content");
+    if (!box || box.dataset.shuffling === "1") return;
+    box.dataset.shuffling = "1";
+    try {
+      const all = await DB.getAllContent();
+      if (!all.length) return;
+      const exclude = await recentlyShownIds();
+      let item = pickContent(all, selectedReasons, exclude);
+      if (!item) item = pickContent(all, selectedReasons, null); // 池子转空，回退不过滤
+      if (!item) return;
+      box.style.opacity = "0";
+      setTimeout(() => {
+        showContentItem(box, item); // 计入 shownTonight，最终落库为这晚展示句
+        requestAnimationFrame(() => { box.style.opacity = "1"; });
+        delete box.dataset.shuffling;
+      }, 160);
+    } catch (e) {
+      box.style.opacity = "1";
+      delete box.dataset.shuffling;
+    }
+  }
+
+  function bindNightContentShuffle() {
+    const box = $("#night-content");
+    if (!box) return;
+    box.addEventListener("click", shuffleNightContent);
+    box.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        shuffleNightContent();
+      }
+    });
+  }
+
   function renderReasonChips() {
     const wrap = $("#reason-list");
     wrap.innerHTML = "";
@@ -744,6 +780,7 @@
     bindBrainDump();
     bindSleepButton();
     bindBackToNightFlow();
+    bindNightContentShuffle();
     bindMood();
     bindMorningSave();
     bindSettings();
