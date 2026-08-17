@@ -2,7 +2,7 @@
    策略：App Shell 预缓存（cache-first），其余请求网络优先并回退缓存。
    保证离线可打开、首页秒开。 */
 
-const CACHE = "sleep-ritual-v6";
+const CACHE = "sleep-ritual-v7";
 const SHELL = [
   "./",
   "./index.html",
@@ -19,9 +19,13 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
-  );
+  // 不调用 skipWaiting：让新 SW 进入 waiting，
+  // 等用户在应用内点击“更新”后由 app 通过 postMessage 触发 skipWaiting。
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+});
+
+self.addEventListener("message", (e) => {
+  if (e.data === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", (e) => {

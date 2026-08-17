@@ -170,3 +170,17 @@
 **理由**：本次跨天 bug 的根因正是 `sleepDate` 的日期边界算错；原 64 项测试均为端到端（db/mvp/ui-smoke），不锁定该纯函数的内部数学——若有人把阈值误改，端到端测试在常规时段仍全绿，bug 会悄悄溜回。单测把"凌晨归前一天"这条契约钉死为可自动验证的断言，防回归。钩子挂 `window` 是零构建约束下的最小改动（方案 A），不引入新模块或构建步骤。
 
 **运行**：`SR_PORT=<port> NODE_PATH=<ws>/node_modules node tests/sleepdate.test.js`（需本地服务器提供 index.html 及其 script）。至此四套回归 db 30 + mvp 17 + ui-smoke 17 + sleepdate 8 = 72 项。
+
+## D32. PWA 应用内更新提示（方案 A，2026-08-17）
+
+**决定**：改用「应用内更新横幅 + 用户主动触发」策略，替代「依赖浏览器下拉刷新」。具体：
+- `sw.js`：移除 `install` 阶段的 `self.skipWaiting()`（原自动跳过等待），改为让新 SW 进入 `waiting`；新增 `message` 监听，收到 `SKIP_WAITING` 才 `skipWaiting()`；缓存版本 v6 → v7。
+- `app.js`：`registerSW()` 重写——监听 `reg.updatefound` / 新 worker 的 `statechange`，当新 SW 状态为 `installed` 且 `navigator.serviceWorker.controller` 存在（即已有旧 SW 在控制页面）时，显示顶部更新横幅 `#update-banner`；横幅「更新」按钮点击 → 向新 worker `postMessage('SKIP_WAITING')`；监听 `controllerchange` → `location.reload()` 拿新壳。暴露 `window.__checkForUpdate = () => reg.update()` 供设置页「检查更新」按钮调用。
+- `index.html`：`<body>` 内 `#app` 前加 `#update-banner` 横幅（默认 `hidden`）；设置页「数据」区加 `#btn-check-update` 按钮。
+- `css`：`.update-banner` 固定定位（`position: fixed; top:0`，含 `safe-area-inset-top` padding），暖琥珀深底，按钮 ≥48px 触摸目标。
+
+**理由**：iOS 将网站「添加到主屏幕」后以 standalone 全屏打开时，顶部下拉手势被当作页面内橡皮筋滚动，**不触发浏览器刷新**——所有 iOS 独立 PWA 均无下拉刷新入口；且 SW 更新生命周期要求当前页面 reload 才接管，已加载运行的旧 JS 不受 `clients.claim` 影响。二者叠加导致「更新后点进去仍是旧的、又无法手动刷新」。方案 A 在应用内提供更新入口，彻底绕开 standalone 无下拉刷新的限制，且把「何时更新」交给用户（不打断正在进行的流程，如写 Brain Dump）。
+
+**机制要点**：放弃 install 自动 skipWaiting 是关键——否则新 SW 立即激活，`installed` 状态一闪而过，`updatefound` 检测不到稳定 waiting 态，横幅无法可靠显示。改为 waiting + 用户点击触发，是 Workbox 等框架的 prompt 策略标准做法。
+
+**已知遗留**：当前已推送的 v6 sw.js 含自动 skipWaiting，用户手机若仍是旧实例，需**先杀进程重进一次**加载含本方案的新版本（v7）；此后每次更新即自动出现应用内提示。回归 72 项未变（db30+mvp17+ui17+sleepdate8），jsdom 下无 serviceWorker，`registerSW` 提前 return 不受影响。

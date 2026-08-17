@@ -677,11 +677,53 @@
   /* ---------- PWA ---------- */
 
   function registerSW() {
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("sw.js").catch((e) =>
-        console.warn("SW 注册失败", e)
-      );
+    if (!("serviceWorker" in navigator)) return;
+
+    const showUpdateBanner = (worker) => {
+      const banner = document.getElementById("update-banner");
+      const btn = document.getElementById("btn-update-now");
+      if (!banner || banner.dataset.shown) return;
+      banner.dataset.shown = "1";
+      banner.hidden = false;
+      btn.onclick = () => {
+        if (worker && worker.postMessage) worker.postMessage("SKIP_WAITING");
+      };
+    };
+
+    const track = (worker) => {
+      if (!worker) return;
+      worker.addEventListener("statechange", () => {
+        if (worker.state === "installed" && navigator.serviceWorker.controller) {
+          showUpdateBanner(worker);
+        }
+      });
+    };
+
+    const checkBtn = document.getElementById("btn-check-update");
+    if (checkBtn) {
+      checkBtn.addEventListener("click", () => {
+        if (window.__checkForUpdate) {
+          window.__checkForUpdate();
+          const old = checkBtn.textContent;
+          checkBtn.textContent = "已检查";
+          setTimeout(() => (checkBtn.textContent = old), 1500);
+        }
+      });
     }
+
+    // 新 SW 接管后刷新一次，拿到新壳
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      location.reload();
+    });
+
+    navigator.serviceWorker
+      .register("sw.js")
+      .then((reg) => {
+        if (reg.installing) track(reg.installing);
+        reg.addEventListener("updatefound", () => track(reg.installing));
+        window.__checkForUpdate = () => reg.update();
+      })
+      .catch((e) => console.warn("SW 注册失败", e));
   }
 
   /* ---------- 启动 ---------- */

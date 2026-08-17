@@ -343,6 +343,37 @@ body {
 }
 .link-soft:active { opacity: 0.6; }
 
+/* ---------- 更新提示横幅（PWA 应用内更新） ---------- */
+.update-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
+  background: var(--accent-warm-deep);
+  color: #f3ead6;
+  font-size: 14px;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.45);
+}
+.update-banner[hidden] { display: none; }
+.update-banner__btn {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent-warm);
+  color: #1a1407;
+  font-weight: 600;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.update-banner__btn:active { opacity: 0.8; }
+
 /* ============================================================
    MORNING
    ============================================================ */

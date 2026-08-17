@@ -15,6 +15,11 @@
 </head>
 <body data-mode="night">
 
+  <div id="update-banner" class="update-banner" hidden role="alert">
+    <span class="update-banner__text">已发布新版本，点此更新</span>
+    <button id="btn-update-now" class="update-banner__btn" type="button">更新</button>
+  </div>
+
   <main id="app">
 
     <!-- ============ NIGHT MODE ============ -->
@@ -151,6 +156,7 @@
         <label class="btn btn-ghost" for="file-import">导入 JSON</label>
         <input id="file-import" type="file" accept="application/json" hidden />
         <button id="btn-wipe" class="btn btn-danger" type="button">清空所有数据</button>
+        <button id="btn-check-update" class="btn btn-ghost" type="button">检查更新</button>
       </div>
     </section>
 
