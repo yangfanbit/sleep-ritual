@@ -2,7 +2,7 @@
    策略：App Shell 预缓存（cache-first），其余请求网络优先并回退缓存。
    保证离线可打开、首页秒开。 */
 
-const CACHE = "sleep-ritual-v7";
+const CACHE = "sleep-ritual-v8";
 const SHELL = [
   "./",
   "./index.html",
