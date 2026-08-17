@@ -184,3 +184,18 @@
 **机制要点**：放弃 install 自动 skipWaiting 是关键——否则新 SW 立即激活，`installed` 状态一闪而过，`updatefound` 检测不到稳定 waiting 态，横幅无法可靠显示。改为 waiting + 用户点击触发，是 Workbox 等框架的 prompt 策略标准做法。
 
 **已知遗留**：当前已推送的 v6 sw.js 含自动 skipWaiting，用户手机若仍是旧实例，需**先杀进程重进一次**加载含本方案的新版本（v7）；此后每次更新即自动出现应用内提示。回归 72 项未变（db30+mvp17+ui17+sleepdate8），jsdom 下无 serviceWorker，`registerSW` 提前 return 不受影响。
+
+## D33. 每日一句点击换句（方案 A，2026-08-17）
+
+**决定**：`#night-content` 改为可点击——加 `role="button"` + `tabindex="0"` + `aria-label="点击换一句"`，外层加 `.night-quote-wrap`，右下角加极淡角标 `.quote-hint`（仅 hover / `:focus-visible` 时显现，默认 `opacity:0`、`pointer-events:none`）。新增 `shuffleNightContent()`：取 `DB.getAllContent()` → `exclude = recentlyShownIds() ∪ shownTonight` → `item = pickContent(all, selectedReasons, exclude)`（**用当前 selectedReasons，与选原因后的联动一致**）；池子转空时 `pickContent(all, selectedReasons, null)` 回退不过滤再取；命中则 `showContentItem()`（自然计入 `shownTonight`）并走轻量「淡出(160ms)→换→淡入」。`bindNightContentShuffle()` 绑定 `click` 与 `keydown(Enter/Space)`，在 `init()` 中调用。防抖：`dataset.shuffling` 同步置位、动画结束后清除，避免连点重入。
+
+**理由**：换句机制本就存在（`renderContentForReasons` 选原因后换一条），只是没有「手动随时换」入口；用户想对当前一句不感冒时当场换。点击换句本质是「给已有换句逻辑加一个手动触发点」，而非新增匹配逻辑，故复用 `pickContent` 与去重集，代价极小。
+
+**与原设计的取舍**：
+- 不破坏「每晚一句」的稳定感——换句是**用户主动**触发，且只改当晚会话内展示，不污染持久「最近 7 晚」去重（`shownContentIds` 落库的仍是最后一次展示的句）。
+- 低刺激原则：`cursor:pointer` + 极淡角标，不引入弹窗/花哨动画；换句仅 0.18s 透明度过渡。
+- 与原因联动一致：传 `selectedReasons` 而非 `null`，选了原因后换句仍在「该原因相关句」里换，不退回通用池。
+- 可访问性：整句可键盘聚焦（Enter/Space 触发），`aria-label` 告知作用。
+- 池子耗尽兜底：一夜把 night 池转完，`pickContent` 回退不过滤会回到某句（「换了个寂寞」），可接受，未加二次 pick 避开同 id。
+
+**回归**：`ui-smoke.test.js` +3 断言（role=button / tabindex=0 / 点击同步置 `shuffling` 标志），总数 17 → 20。全四套 db30+mvp17+ui20+sleepdate8 = 75 项通过。已推送 `0fae2e4..c26206d`。
