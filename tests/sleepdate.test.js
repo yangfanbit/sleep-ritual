@@ -58,5 +58,5 @@ const ROOT = path.resolve(__dirname, "..");
     if (ok) pass++;
   }
   console.log(`\n${pass}/${results.length} checks passed`);
-  process.exit(pass === results.length ? 0 : 1);
+  process.exitCode = pass === results.length ? 0 : 1;
 })();

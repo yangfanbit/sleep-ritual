@@ -77,7 +77,7 @@ const check = (name, cond) => results.push([name, !!cond]);
 
   /* ---- 导出 ---- */
   const dump = await DB.exportAll();
-  check("export marker", dump.app === "sleep-ritual" && dump.version === 1);
+  check("export marker", dump.app === "sleep-ritual" && dump.schemaVersion === 2 && dump.version === 2);
   check("export settings", dump.settings.length === 2);
   check("export content", dump.content.length === SEED_CONTENT.length);
   check("export nights", dump.nightSessions.length === 2);
@@ -118,8 +118,8 @@ const check = (name, cond) => results.push([name, !!cond]);
     if (!ok) fail++;
   }
   console.log(fail ? "\n" + fail + " failed" : "\nall " + results.length + " checks passed");
-  process.exit(fail ? 1 : 0);
+  process.exitCode = fail ? 1 : 0;
 })().catch((e) => {
   console.error("TEST ERROR", e);
-  process.exit(1);
+  process.exitCode = 1;
 });

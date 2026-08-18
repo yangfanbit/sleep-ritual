@@ -7,16 +7,20 @@
    - content         : keyPath "id"    — 内容库（quote / excerpt / tip / self）
    - nightSessions   : keyPath "id"    — 每晚的记录，index "date"
    - morningSessions : keyPath "id"    — 早晨的记录，index "date"
+   - events          : keyPath "id"    — append-only 行为事件日志，index "sessionId"/"date"
+
+   DB_VERSION 升级时通过 onupgradeneeded 增量迁移，绝不删除已有 store / 数据。
    ============================================================ */
 
 const DB_NAME = "sleep-ritual";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
+      // 仅创建尚不存在的 store —— 旧数据原样保留（零数据丢失迁移）
       if (!db.objectStoreNames.contains("settings")) {
         db.createObjectStore("settings", { keyPath: "key" });
       }
@@ -37,6 +41,14 @@ function openDB() {
         });
         store.createIndex("date", "date", { unique: false });
       }
+      if (!db.objectStoreNames.contains("events")) {
+        const store = db.createObjectStore("events", {
+          keyPath: "id",
+          autoIncrement: true,
+        });
+        store.createIndex("sessionId", "sessionId", { unique: false });
+        store.createIndex("date", "date", { unique: false });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -50,7 +62,16 @@ function tx(db, store, mode, fn) {
     const t = db.transaction(store, mode);
     const s = t.objectStore(store);
     const out = fn(s);
-    t.oncomplete = () => resolve(out && out.__result !== undefined ? out.__result : out);
+    t.oncomplete = () => {
+      // fn 通常返回 IDBRequest（add/put/delete），其 .result 为自增 key 或写入结果。
+      // 解析为 key 而非 request 本身——否则调用方会拿到无法序列化/无用的 Request 对象
+      // （例如 addNightSession 返回的 id 被当成 session 主键，导致 DataCloneError）。
+      if (out && typeof out === "object" && typeof out.readyState === "string" && "result" in out) {
+        resolve(out.result);
+      } else {
+        resolve(out);
+      }
+    };
     t.onerror = () => reject(t.error);
   });
 }
@@ -100,6 +121,13 @@ const DB = {
     );
   },
 
+  async updateContent(item) {
+    const db = await this.ready();
+    return tx(db, "content", "readwrite", (s) =>
+      s.put({ ...item, updatedAt: new Date().toISOString() })
+    );
+  },
+
   async deleteContent(id) {
     const db = await this.ready();
     return tx(db, "content", "readwrite", (s) => s.delete(id));
@@ -125,9 +153,20 @@ const DB = {
     }
     const db = await this.ready();
     return tx(db, "content", "readwrite", (s) => {
-      items.forEach((item) =>
-        s.add({ ...item, createdAt: new Date().toISOString() })
-      );
+      items.forEach((item) => {
+        const now = new Date().toISOString();
+        // 兼容旧种子缺字段：补 createdAt / updatedAt / weight / tags / targetReasons
+        s.add({
+          ...item,
+          tags: item.tags || [],
+          targetReasons: item.targetReasons || [],
+          weight: item.weight ?? 1,
+          usageCount: item.usageCount || 0,
+          lastShownAt: item.lastShownAt || null,
+          createdAt: item.createdAt || now,
+          updatedAt: item.updatedAt || now,
+        });
+      });
     });
   },
 
@@ -136,6 +175,24 @@ const DB = {
   async addNightSession(session) {
     const db = await this.ready();
     return tx(db, "nightSessions", "readwrite", (s) => s.add(session));
+  },
+
+  async getNightSessionById(id) {
+    const db = await this.ready();
+    return reqToPromise(
+      db.transaction("nightSessions", "readonly").objectStore("nightSessions").get(id)
+    );
+  },
+
+  async updateNightSession(session) {
+    const db = await this.ready();
+    return tx(db, "nightSessions", "readwrite", (s) => s.put(session));
+  },
+
+  /* 取「本晚仍在进行（active）」的会话：同晚不重复创建 */
+  async getActiveNightSession(date) {
+    const all = await this.getRecentNightSessions(100000);
+    return all.find((n) => n.date === date && n.status === "active") || null;
   },
 
   async getRecentNightSessions(limit = 30) {
@@ -166,28 +223,75 @@ const DB = {
     return all.sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
   },
 
+  /* ---------- events（append-only 行为日志） ---------- */
+
+  /* event: { sessionId?, date?, type, timestamp?, payload? }
+     返回自动生成的 id（供 UI / 测试关联）。 */
+  async addEvent(event) {
+    const db = await this.ready();
+    const ev = {
+      sessionId: event.sessionId != null ? event.sessionId : null,
+      date: event.date != null ? event.date : todayStr(),
+      type: event.type,
+      timestamp: event.timestamp != null ? event.timestamp : new Date().toISOString(),
+      payload: event.payload != null ? event.payload : null,
+    };
+    const s = db.transaction("events", "readwrite").objectStore("events");
+    const req = s.add(ev);
+    return reqToPromise(req);
+  },
+
+  async getRecentEvents(limit = 100) {
+    const db = await this.ready();
+    const all = await reqToPromise(
+      db.transaction("events", "readonly").objectStore("events").getAll()
+    );
+    return all
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, limit);
+  },
+
+  async getEventsBySession(sessionId) {
+    const all = await this.getRecentEvents(100000);
+    return all.filter((e) => e.sessionId === sessionId);
+  },
+
+  async getEventsByType(type, limit = 100000) {
+    const all = await this.getRecentEvents(limit);
+    return all.filter((e) => e.type === type);
+  },
+
   /* ---------- 导出 / 导入 / 清空 ---------- */
 
   async exportAll() {
-    const [settings, content, nightSessions, morningSessions] = await Promise.all([
-      (async () => {
-        const db = await this.ready();
-        return reqToPromise(
-          db.transaction("settings", "readonly").objectStore("settings").getAll()
-        );
-      })(),
-      this.getAllContent(),
-      this.getRecentNightSessions(100000),
-      this.getRecentMorningSessions(100000),
-    ]);
+    const [settings, content, nightSessions, morningSessions, events] =
+      await Promise.all([
+        (async () => {
+          const db = await this.ready();
+          return reqToPromise(
+            db.transaction("settings", "readonly").objectStore("settings").getAll()
+          );
+        })(),
+        this.getAllContent(),
+        this.getRecentNightSessions(100000),
+        this.getRecentMorningSessions(100000),
+        (async () => {
+          const db = await this.ready();
+          return reqToPromise(
+            db.transaction("events", "readonly").objectStore("events").getAll()
+          );
+        })(),
+      ]);
     return {
       app: "sleep-ritual",
-      version: 1,
+      schemaVersion: 2,
+      version: 2,
       exportedAt: new Date().toISOString(),
       settings,
       content,
       nightSessions,
       morningSessions,
+      events,
     };
   },
 
@@ -200,10 +304,12 @@ const DB = {
       rows && rows.length
         ? tx(db, storeName, "readwrite", (s) => rows.forEach((r) => s.put(r)))
         : Promise.resolve();
+    // 兼容旧版备份（无 events / schemaVersion）：缺失字段以空/默认值兜底
     await putAll("settings", data.settings);
     await putAll("content", data.content);
     await putAll("nightSessions", data.nightSessions);
     await putAll("morningSessions", data.morningSessions);
+    await putAll("events", data.events || []);
   },
 
   async wipeAll() {
@@ -214,5 +320,6 @@ const DB = {
     await clear("content");
     await clear("nightSessions");
     await clear("morningSessions");
+    await clear("events");
   },
 };

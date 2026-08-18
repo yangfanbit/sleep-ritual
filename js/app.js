@@ -73,6 +73,8 @@
   /* ---------- NIGHT ---------- */
 
   let selectedReasons = [];
+  let currentNightId = null;     // 当前晚 active 会话 id（打开即建，completed 时复用）
+  let currentSource = "unknown"; // 入口来源（Phase 4 AnchorProvider 填充）
   let nightShownAt = null;   // 本次打开夜间页的时间（写入 session）
   let shownContentId = null; // 本次展示的内容 id（写入 session）
 
@@ -127,6 +129,23 @@
     // 只显示内容本体。source 是数据层的溯源元数据（管理者可查），
     // 不渲染到夜间页面——低刺激原则，夜间不出现任何非干预信息。
     box.textContent = item.text;
+    if (currentNightId && item.id) {
+      DB.addEvent({
+        sessionId: currentNightId,
+        type: "content_shown",
+        payload: { contentId: item.id, type: item.type },
+      }).catch(() => {});
+    }
+  }
+
+  async function contentTypeById(id) {
+    try {
+      const all = await DB.getAllContent();
+      const c = all.find((x) => x.id === id);
+      return c ? c.type : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   /* 从内容池中按规则选取一条：
@@ -281,6 +300,13 @@
       if (selectedReasons.length >= 2) return; // 最多 2 个
       selectedReasons.push(reason.id);
       btn.classList.add("is-on");
+      if (currentNightId) {
+        DB.addEvent({
+          sessionId: currentNightId,
+          type: "reason_selected",
+          payload: { reasonId: reason.id },
+        }).catch(() => {});
+      }
     }
     renderBehaviorTip();
     renderContentForReasons();
@@ -295,6 +321,13 @@
     }
     text.textContent = ACTION_TIPS[selectedReasons[0]] || "";
     box.hidden = false;
+    if (currentNightId && text.textContent) {
+      DB.addEvent({
+        sessionId: currentNightId,
+        type: "behavior_shown",
+        payload: { actionId: ACTION_IDS[selectedReasons[0]] || null },
+      }).catch(() => {});
+    }
   }
 
   let brainDumpUsed = false; // 本次夜间流程是否用过「丢掉」（只记标志，不存内容）
@@ -305,6 +338,12 @@
       if (!input.value.trim()) return;
       // 不保存，只做轻微淡出反馈
       brainDumpUsed = true;
+      if (currentNightId) {
+        DB.addEvent({
+          sessionId: currentNightId,
+          type: "brain_dump_started",
+        }).catch(() => {});
+      }
       input.classList.add("fade-out");
       setTimeout(() => {
         input.value = "";
@@ -329,22 +368,44 @@
   async function bindSleepButton() {
     $("#btn-sleep").addEventListener("click", async () => {
       const firstReason = selectedReasons.length ? selectedReasons[0] : null;
+      if (!currentNightId) await ensureNightSession();
+      const prev = currentNightId
+        ? await DB.getNightSessionById(currentNightId).catch(() => null)
+        : null;
+      const sd = sleepDate();
+      const nowIso = new Date().toISOString();
       const session = {
-        date: sleepDate(),
+        id: currentNightId,
+        date: sd,
+        status: "completed",
+        sessionStartedAt: (prev && prev.sessionStartedAt) || nightShownAt,
+        completedAt: nowIso,
+        actualSleepAt: nowIso,
         bedTimeTarget: await DB.getSetting("bedtime", "23:30").catch(() => "23:30"),
-        shownAt: nightShownAt,
-        actualSleepAt: new Date().toISOString(),
         contentId: shownContentId,
+        contentType: shownContentId ? await contentTypeById(shownContentId) : null,
         shownContentIds: shownContentId ? [shownContentId] : [],
         reasons: [...selectedReasons],
         selectedActionId: firstReason ? ACTION_IDS[firstReason] || null : null,
         behaviorTip: firstReason ? ACTION_TIPS[firstReason] : null,
         brainDumpUsed,
         tonightMessage: $("#tonight-message").value.trim() || null,
-        sleepTownAttempted: true, // 点击开始睡觉即发起跳转尝试（能否成功无法可靠检测）
+        sleepTownAttempted: true,
+        sleepTownResult: "attempted",
+        source: currentSource,
       };
       try {
-        await DB.addNightSession(session);
+        await DB.updateNightSession(session);
+        await DB.addEvent({
+          sessionId: currentNightId,
+          type: "night_completed",
+          payload: { date: sd },
+        }).catch(() => {});
+        await DB.addEvent({
+          sessionId: currentNightId,
+          type: "sleep_decision",
+          payload: { source: currentSource },
+        }).catch(() => {});
       } catch (e) {
         console.error("保存失败", e);
       }
@@ -363,6 +424,12 @@
      - 因此：自动尝试 + 常驻手动按钮双轨，失败给出明确提示，
        scheme 失效不影响任何功能。 */
   function tryOpenSleepTown() {
+    if (currentNightId) {
+      DB.addEvent({
+        sessionId: currentNightId,
+        type: "sleeptown_attempted",
+      }).catch(() => {});
+    }
     const attemptAt = Date.now();
     window.location.href = "sleeptown://";
     setTimeout(() => {
@@ -370,6 +437,12 @@
       if (!document.hidden && Date.now() - attemptAt < 2600) {
         const hint = $("#sleeptown-hint");
         if (hint) hint.hidden = false;
+        if (currentNightId) {
+          DB.addEvent({
+            sessionId: currentNightId,
+            type: "sleeptown_fallback_opened",
+          }).catch(() => {});
+        }
       }
     }, 2200);
   }
@@ -391,19 +464,61 @@
   // 测试钩子：暴露夜/晨配对纯函数供单元测试（对生产逻辑无副作用）
   window.__pairMorningToNight = pairMorningToNight;
 
-  /* 判断"今晚是否已经睡过"：
-     - 04:00 前：看 sleepDate(现在) 是否有记录
-     - 04:00 后：看 sleepDate(现在) 是否有记录（同一函数已把凌晨归入前一天）
-     午夜到 4 点之间不强制晚安，允许再次进入睡前流程。 */
+  /* 确保本晚有一条 active 会话：打开 Night 即创建（记录 sessionStartedAt），
+     已完成则不再创建；同晚不重复（getActiveNightSession 按 date+status 唯一）。 */
+  async function ensureNightSession() {
+    const sd = sleepDate();
+    const active = await DB.getActiveNightSession(sd).catch(() => null);
+    if (active) {
+      currentNightId = active.id;
+      return active;
+    }
+    const last = await DB.getLatestNightSession().catch(() => null);
+    if (last && last.date === sd && last.status === "completed") {
+      currentNightId = null;
+      return null;
+    }
+    const session = {
+      date: sd,
+      status: "active",
+      sessionStartedAt: new Date().toISOString(),
+      source: currentSource,
+      bedTimeTarget: await DB.getSetting("bedtime", "23:30").catch(() => "23:30"),
+      reasons: [],
+      selectedActionId: null,
+      behaviorTip: null,
+      contentId: null,
+      shownContentIds: [],
+      tonightMessage: null,
+      sleepTownAttempted: false,
+      brainDumpUsed: false,
+    };
+    try {
+      currentNightId = await DB.addNightSession(session);
+      await DB.addEvent({
+        sessionId: currentNightId,
+        type: "night_started",
+        payload: { date: sd, source: currentSource },
+      }).catch(() => {});
+    } catch (e) {
+      console.error("创建夜间会话失败", e);
+    }
+    return session;
+  }
+
+  /* 判断"今晚是否已经睡过"：基于 active/completed 状态，而非仅日期相等。 */
   async function resumeNightState() {
     nightShownAt = new Date().toISOString();
+    const sd = sleepDate();
     try {
       const last = await DB.getLatestNightSession();
-      if (last && last.date === sleepDate()) {
+      if (last && last.date === sd && last.status === "completed") {
+        currentNightId = null;
         showGoodnight();
-      } else {
-        showNightFlow();
+        return;
       }
+      await ensureNightSession();
+      showNightFlow();
     } catch (e) {
       showNightFlow();
     }
@@ -432,6 +547,7 @@
   /* ---------- MORNING ---------- */
 
   let selectedMood = null;
+  let currentMorningId = null;
 
   function bindMood() {
     $$(".mood").forEach((btn) =>
@@ -454,6 +570,7 @@
   }
 
   async function renderMorning() {
+    DB.addEvent({ type: "morning_opened", payload: { date: todayStr() } }).catch(() => {});
     const last = await DB.getLatestNightSession().catch(() => null);
     // 只在「最近 18 小时内」的夜间记录才算"昨晚"，避免展示几天前的旧数据
     const fresh =
@@ -480,7 +597,12 @@
         createdAt: new Date().toISOString(),
       };
       try {
-        await DB.addMorningSession(session);
+        currentMorningId = await DB.addMorningSession(session);
+        await DB.addEvent({
+          sessionId: currentMorningId,
+          type: "morning_completed",
+          payload: { date: todayStr() },
+        }).catch(() => {});
       } catch (e) {
         console.error("保存失败", e);
       }
@@ -815,6 +937,7 @@
     try {
       await DB.ready();
       await DB.seedContentIfEmpty();
+      await DB.addEvent({ type: "app_opened", payload: { ts: Date.now() } }).catch(() => {});
     } catch (e) {
       console.error("IndexedDB 初始化失败，应用将以无存储模式运行", e);
     }

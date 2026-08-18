@@ -153,8 +153,8 @@ const ROOT = path.resolve(__dirname, "..");
   console.log(
     fail ? "\n" + fail + " failed" : "\nall " + results.length + " checks passed"
   );
-  process.exit(fail ? 1 : 0);
+  process.exitCode = fail ? 1 : 0;
 })().catch((e) => {
   console.error("TEST ERROR", e);
-  process.exit(1);
+  process.exitCode = 1;
 });
