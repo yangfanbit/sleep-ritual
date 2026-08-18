@@ -55,6 +55,7 @@
       const target = "#/" + name;
       if (location.hash !== target) history.replaceState(null, "", target);
     }
+    if (name === "night") await renderTonightMorningEcho();
     if (name === "morning") await renderMorning();
     if (name === "history") await renderHistory();
     if (name === "settings") await renderSettings();
@@ -237,6 +238,27 @@
     });
   }
 
+  /* 夜间页「每日一句」下方回显：今天早晨写给自己那句话。
+     仅当今天（日历日）确有早晨记录且含 morningMessage 时才显示；否则隐藏。 */
+  async function renderTonightMorningEcho() {
+    const box = $("#morning-echo");
+    if (!box) return;
+    const txt = box.querySelector(".morning-echo-text");
+    try {
+      const mornings = await DB.getRecentMorningSessions(30).catch(() => []);
+      const today = todayStr();
+      const m = mornings.find((x) => x.date === today && x.morningMessage);
+      if (m && txt) {
+        txt.textContent = m.morningMessage;
+        box.hidden = false;
+      } else {
+        box.hidden = true;
+      }
+    } catch (e) {
+      box.hidden = true;
+    }
+  }
+
   function renderReasonChips() {
     const wrap = $("#reason-list");
     wrap.innerHTML = "";
@@ -366,6 +388,8 @@
 
   // 测试钩子：暴露纯函数供单元测试断言日期边界（对生产逻辑无副作用）
   window.sleepDate = sleepDate;
+  // 测试钩子：暴露夜/晨配对纯函数供单元测试（对生产逻辑无副作用）
+  window.__pairMorningToNight = pairMorningToNight;
 
   /* 判断"今晚是否已经睡过"：
      - 04:00 前：看 sleepDate(现在) 是否有记录
@@ -401,6 +425,7 @@
       renderNightContent();
       renderBehaviorTip();
       showNightFlow();
+      renderTonightMorningEcho();
     });
   }
 
@@ -512,13 +537,35 @@
     el.hidden = false;
   }
 
+  /* 夜间/早晨配对（纯函数，便于单测）。
+     夜记录用 sleepDate（睡眠日），晨记录用醒来日历日，二者日期锚点不同，
+     不能靠日期字符串相等配对。改为：每条早晨挂到「actualSleepAt ≤ wakeAt
+     且间隔 ≤ 18h」的最近一条夜间记录。返回 { [nightId]: morning }。 */
+  function pairMorningToNight(nights, mornings) {
+    const map = {};
+    mornings.forEach((m) => {
+      const wake = new Date(m.wakeAt).getTime();
+      let best = null;
+      let bestSleep = -Infinity;
+      nights.forEach((n) => {
+        const sleep = new Date(n.actualSleepAt).getTime();
+        if (sleep <= wake && wake - sleep <= 18 * 3600 * 1000 && sleep > bestSleep) {
+          best = n;
+          bestSleep = sleep;
+        }
+      });
+      if (best) map[best.id] = m;
+    });
+    return map;
+  }
+
   async function renderHistory() {
     const [nights, mornings] = await Promise.all([
       DB.getRecentNightSessions(30).catch(() => []),
       DB.getRecentMorningSessions(30).catch(() => []),
     ]);
-    const morningByDate = {};
-    mornings.forEach((m) => (morningByDate[m.date] = m));
+    // 时间邻近配对，避免夜/晨日期锚点不同造成配错位（显示旧内容）
+    const morningByNightId = pairMorningToNight(nights, mornings);
 
     renderHistoryTrend(nights);
 
@@ -562,7 +609,7 @@
         q.textContent = n.tonightMessage;
         div.appendChild(q);
       }
-      const m = morningByDate[n.date];
+      const m = morningByNightId[n.id];
       if (m && (m.morningMessage || m.mood)) {
         const mo = document.createElement("div");
         const moodIcon = { good: "🙂", ok: "😐", sleepy: "😴" }[m.mood] || "";

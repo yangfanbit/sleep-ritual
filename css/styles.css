@@ -165,6 +165,31 @@ body {
   opacity: 0.7;
 }
 
+/* 夜间页「每日一句」下方：今晨写给自己那句话的回显（无则不显示） */
+.morning-echo {
+  margin: 0.9rem 0 0;
+  padding: 0.9rem 0.95rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: center;
+}
+.morning-echo[hidden] {
+  display: none;
+}
+.morning-echo-label {
+  display: block;
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  color: var(--text-night-dim);
+  margin-bottom: 0.45rem;
+}
+.morning-echo-text {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.85;
+  color: var(--text-night-mid);
+  opacity: 0.82;
+}
+
 /* ---------- 原因选择：大触摸目标 ---------- */
 
 .chips {

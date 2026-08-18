@@ -27,6 +27,8 @@ const { JSDOM } = require("jsdom");
 
   // 17 点打开 → 默认夜间
   check("night view active", $("#view-night").classList.contains("is-active"));
+  check("morning-echo present", !!$("#morning-echo"));
+  check("morning-echo hidden by default", $("#morning-echo").hidden === true);
 
   const chips = $$("#reason-list .chip");
   check("9 reason chips rendered", chips.length === 9);
@@ -95,6 +97,29 @@ const { JSDOM } = require("jsdom");
   check("night-content tabindex=0", nc.getAttribute("tabindex") === "0");
   nc.dispatchEvent(new window.Event("click", { bubbles: true }));
   check("click triggers shuffle (flag set sync)", nc.dataset.shuffling === "1");
+
+  // 夜/晨配对：验证修复后"今天写的早晨"挂到正确的夜间记录（不再显示旧内容）
+  const pair = window.__pairMorningToNight;
+  check("pairMorningToNight exposed", typeof pair === "function");
+  if (typeof pair === "function") {
+    const nights = [
+      { id: 1, date: "2026-08-17", actualSleepAt: "2026-08-17T23:00:00.000Z" },
+      { id: 2, date: "2026-08-16", actualSleepAt: "2026-08-16T23:00:00.000Z" },
+    ];
+    const mornings = [
+      { date: "2026-08-18", wakeAt: "2026-08-18T06:00:00.000Z", morningMessage: "今天写" },
+      { date: "2026-08-17", wakeAt: "2026-08-17T06:00:00.000Z", morningMessage: "旧内容" },
+    ];
+    const map = pair(nights, mornings);
+    check("today morning pairs to latest night (id1)", map[1] && map[1].morningMessage === "今天写");
+    check("old morning pairs to prior night (id2)", map[2] && map[2].morningMessage === "旧内容");
+    // 孤立早晨（无前驱夜间）→ 不进 map
+    const orphan = pair(
+      [{ id: 9, date: "2026-08-20", actualSleepAt: "2026-08-20T23:00:00.000Z" }],
+      [{ date: "2026-08-18", wakeAt: "2026-08-18T06:00:00.000Z", morningMessage: "X" }]
+    );
+    check("orphan morning not paired", Object.keys(orphan).length === 0);
+  }
 
   let fail = 0;
   for (const [n, ok] of results) {

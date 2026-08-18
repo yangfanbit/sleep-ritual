@@ -199,3 +199,20 @@
 - 池子耗尽兜底：一夜把 night 池转完，`pickContent` 回退不过滤会回到某句（「换了个寂寞」），可接受，未加二次 pick 避开同 id。
 
 **回归**：`ui-smoke.test.js` +3 断言（role=button / tabindex=0 / 点击同步置 `shuffling` 标志），总数 17 → 20。全四套 db30+mvp17+ui20+sleepdate8 = 75 项通过。已推送 `0fae2e4..c26206d`。
+
+## D34. 修复 History 夜/晨配错位 + 夜间页早晨回显（2026-08-18）
+
+**Bug（用户反馈）**：早晨写下「今天想说的话」保存后，进记录发现显示的仍是旧早晨内容（甚至前天的）。
+
+**根因**：History 把夜/晨记录按**日期字符串相等**配对——`morningByDate[m.date] = m` 再用 `morningByNightId[n.date]` 查。但两条记录的日期锚点根本不同：
+- `nightSession.date = sleepDate()`（睡眠日：23 点睡记成当天）；
+- `morningSession.date = todayStr()`（醒来**日历日**）。
+早晨（如 8/18 醒）跟随的是 8/17 的夜，二者日期永远不相等 → 今天写的早晨被孤立、永不显示；最新夜间反而命中「日历日恰好等于其睡眠日」的旧早晨（例如 8/17 早晨写的，其实跟的是 8/16 的夜）。旧逻辑即便「看着正常」也差一天。
+
+**修复（配对改时间邻近）**：抽纯函数 `pairMorningToNight(nights, mornings)`——每条早晨挂到「`actualSleepAt ≤ wakeAt` 且间隔 ≤ 18h」的**最近**一条夜间记录，`{ [nightId]: morning }`。History 改用 `morningByNightId[n.id]`。零数据迁移，不依赖任何日期锚点规则。暴露 `window.__pairMorningToNight` 供测试。
+
+**功能 2（夜间页早晨回显）**：用户希望在「每日一句」下方，显示「今天早晨写给自己那句话」，没写则不显示。新增 `#morning-echo`（`index.html`，`.night-quote-wrap` 之后）+ `renderTonightMorningEcho()`：读 `date === todayStr()` 且有 `morningMessage` 的早晨记录，有则显、无则 `hidden`；在 `showView(night)` 与「回到流程」里调用。与既有对称回路呼应：夜间写 `tonight-message` → 早晨页显示「昨晚写给自己的话」（D12 已有）；早晨写 `morning-message` → 夜间页显示「今晨的我」（本决策新增）。
+
+**边界**：回显只在夜间视图出现（每日一句只在夜间视图），符合「今晚回想今晨的自己」语义；白天开 App 进早晨视图本无此句可放，无需处理。`sw.js` 缓存 v8 → v9（改了 app.js/index.html/css，必须清旧缓存）。
+
+**回归**：`ui-smoke.test.js` +6 断言（morning-echo 存在/默认隐藏、pairMorningToNight 暴露、今天早晨→最新夜 id1、旧早晨→前驱夜 id2、孤立早晨不配对），总数 20 → 26。全四套 db30 + mvp17 + ui26 + sleepdate8 = 81 项通过。
