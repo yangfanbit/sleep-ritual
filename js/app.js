@@ -465,8 +465,10 @@
   window.__pairMorningToNight = pairMorningToNight;
 
   /* 确保本晚有一条 active 会话：打开 Night 即创建（记录 sessionStartedAt），
-     已完成则不再创建；同晚不重复（getActiveNightSession 按 date+status 唯一）。 */
-  async function ensureNightSession() {
+     已完成则不再创建；同晚不重复（getActiveNightSession 按 date+status 唯一）。
+     force=true 用于深链 #/night 显式进入：若今晚已完成，重开该会话（不新建，
+     避免同晚重复），让用户重新走一遍睡前流程。 */
+  async function ensureNightSession(force) {
     const sd = sleepDate();
     const active = await DB.getActiveNightSession(sd).catch(() => null);
     if (active) {
@@ -475,8 +477,30 @@
     }
     const last = await DB.getLatestNightSession().catch(() => null);
     if (last && last.date === sd && last.status === "completed") {
-      currentNightId = null;
-      return null;
+      if (!force) {
+        currentNightId = null;
+        return null;
+      }
+      // 深链显式重新进入：重开今晚已完成会话（不新建，避免同晚重复）
+      const reopened = Object.assign({}, last, {
+        status: "active",
+        sessionStartedAt: new Date().toISOString(),
+        completedAt: null,
+        actualSleepAt: null,
+        source: currentSource,
+      });
+      try {
+        await DB.updateNightSession(reopened);
+        currentNightId = last.id;
+        await DB.addEvent({
+          sessionId: currentNightId,
+          type: "night_reopened",
+          payload: { date: sd, source: currentSource },
+        }).catch(() => {});
+      } catch (e) {
+        console.error("重开夜间会话失败", e);
+      }
+      return reopened;
     }
     const session = {
       date: sd,
@@ -504,6 +528,15 @@
       console.error("创建夜间会话失败", e);
     }
     return session;
+  }
+
+  /* 深链 #/night 进入：强制进入睡前流程（即便今晚已 completed，也重开会话）。 */
+  async function enterNightViaDeepLink() {
+    nightShownAt = new Date().toISOString();
+    currentNightId = null;
+    await ensureNightSession(true);
+    showNightFlow();
+    if (window.AnchorProvider) window.AnchorProvider.clearHash();
   }
 
   /* 判断"今晚是否已经睡过"：基于 active/completed 状态，而非仅日期相等。 */
@@ -956,10 +989,19 @@
     bindSettings();
     registerSW();
 
-    const fromHash = location.hash.replace("#/", "");
-    const view = VIEWS.includes(fromHash) ? fromHash : defaultViewByHour();
-    await showView(view);
-    if (view === "night") await resumeNightState();
+    // 入口来源：集中到 AnchorProvider（平台判断不再散落各处）
+    if (window.AnchorProvider) currentSource = window.AnchorProvider.getCurrentSource();
+    const deep = window.AnchorProvider ? window.AnchorProvider.parseHash() : { view: null };
+    const startView = deep.view && VIEWS.indexOf(deep.view) >= 0 ? deep.view : defaultViewByHour();
+    await showView(startView);
+    if (startView === "night") {
+      if (deep.view === "night") {
+        // 显式深链 #/night：强制进入睡前流程（重开今晚会话，避免重复建）
+        await enterNightViaDeepLink();
+      } else {
+        await resumeNightState();
+      }
+    }
   }
 
   document.addEventListener("DOMContentLoaded", init);
