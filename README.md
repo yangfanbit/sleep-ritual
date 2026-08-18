@@ -1,6 +1,6 @@
 # Sleep Ritual
 
-一个运行在 iPhone 上的个人睡前行为干预 PWA。
+一个跨平台（iOS / Android / 桌面浏览器）的个人睡前行为干预 PWA。
 
 不是睡眠记录 App，是"睡前行为干预器"。核心逻辑：
 
@@ -14,6 +14,18 @@
 ## 边界
 
 本项目完全独立于个人博客（yfnwu.com / Gridea Pro）。不读、不改、不依赖博客的任何代码和部署方式。未来独立部署到 `https://sleep.yfnwu.com/`。
+
+## 支持平台与进入睡前流程
+
+跨平台 PWA：iOS（Safari「添加到主屏幕」standalone）、Android（Chrome「安装应用」）、桌面浏览器均可用，体验一致。
+
+进入睡前流程有三种入口，统一抽象为 `AnchorProvider`，最终都落到 `#/night` 深链，iOS standalone 下无需 Shortcut 自动唤起：
+
+- **手动**：打开 App，按时间默认进入 Night 视图（05:00–11:59 默认 Morning，其余 Night）。
+- **深链**：直接打开 `index.html#/night` 即强制进入睡前流程（同晚已完成则重开该会话，不重复建）。这是跨平台统一入口，可放进主屏快捷方式、自动化或通知。
+- **Shortcut / 通知**（可选）：历史上依赖 iPhone Shortcut 自动打开——现已不再是必要路径；任何能打开该 URL 的方式都等效。
+
+`AnchorProvider.getCurrentSource()` 记录来源（`home_screen` / `shortcut` / `manual` / `notification` / `unknown`），写入 `NightSession.source`，用于后续分析「哪种入口更能促使用户完成睡前流程」。
 
 ## 技术栈
 
@@ -38,7 +50,7 @@ npx serve .
 
 浏览器打开 `http://localhost:8080` 即可。
 
-iPhone 真机调试：让 iPhone 和电脑在同一局域网，访问 `http://<电脑局域网IP>:8080`，然后通过 Safari「添加到主屏幕」以 standalone 模式运行。
+真机调试：让手机和电脑在同一局域网，访问 `http://<电脑局域网IP>:8080`，然后通过「添加到主屏幕」以 standalone 模式运行（iOS Safari / Android Chrome 均支持）。进入睡前流程可用深链 `http://<电脑局域网IP>:8080/index.html#/night`——这是跨平台统一的入口，iOS standalone 下不依赖 Shortcut 自动唤起。
 
 ## 目录结构
 
@@ -46,7 +58,10 @@ iPhone 真机调试：让 iPhone 和电脑在同一局域网，访问 `http://<�
 index.html            入口，四个视图容器 + 底部导航
 css/styles.css        全局样式（Night 深色 / Morning 明亮两套视觉）
 js/content.js         原因选项、行为替代规则表、初始内容库种子
-js/db.js              IndexedDB 数据层（settings / content / 两类 session）
+js/db.js              IndexedDB 数据层（v2：settings / content / 两类 session / events 行为日志）
+js/anchor.js          AnchorProvider：入口来源抽象 + #/night 深链解析（跨平台）
+js/content-selector.js ContentSelector：夜间内容规则评分选择器（原因匹配 + 权重 + 去重 + 探索噪声）
+js/analytics.js       Analytics：睡前行为干预效果与趋势的纯函数层（跨午夜安全）
 js/app.js             视图路由 + 全部交互逻辑
 manifest.webmanifest  PWA 清单
 sw.js                 Service Worker（离线缓存）
@@ -58,21 +73,35 @@ tests/                无头回归测试（jsdom + fake-indexeddb，不进构建
 
 ## 测试
 
+回归套件（共 5 套、135 项，零运行时依赖进项目）：
+
+| 测试 | 项数 | 说明 | 需服务器 |
+| --- | --- | --- | --- |
+| `tests/db.test.js` | 30 | 数据层：种子/设置/两类 session/events 读写/导出导入往返/清空重播种/v1→v2 迁移 | 否 |
+| `tests/sleepdate.test.js` | 8 | `sleepDate()` 凌晨归前一天的日期边界 | 是（默认 8788，可 `SR_PORT` 指定） |
+| `tests/mvp.test.js` | 17 | MVP 闭环：原因→内容匹配 / session 字段完整性 / History | 是（SR_PORT） |
+| `tests/ui-smoke.test.js` | 26 | UI 冒烟：视图/按钮/容错（存储失败不阻断） | 是（SR_PORT） |
+| `tests/architecture.test.js` | 54 | 架构级：迁移/events/ContentSelector/Analytics/深链/重入/SW 壳完整 | 是（SR_PORT） |
+
+依赖装在隔离 Node 工作区，不进入项目：
+
 ```bash
-# 依赖装在隔离 Node 工作区，不进入项目
 npm install jsdom fake-indexeddb
-
-# 数据层回归（30 项）：种子/设置/两类 session/导出/导入往返/清空重播种
-NODE_PATH=<工作区>/node_modules node tests/db.test.js
-
-# UI 冒烟（17 项）：需先在项目根目录起服务 python -m http.server 8788
-NODE_PATH=<工作区>/node_modules node tests/ui-smoke.test.js
-
-# MVP 闭环（17 项）：原因→内容匹配 / session 字段完整性 / History 趋势
-NODE_PATH=<工作区>/node_modules node tests/mvp.test.js
 ```
 
-注：Windows 本机若有系统代理，Node 访问 localhost 可能被截断，测试前加 `env -u HTTP_PROXY -u HTTPS_PROXY`（UI 冒烟与 MVP 测试经本地服务器加载页面）。
+jsdom 类测试（ui-smoke / mvp / architecture / sleepdate）需先在项目根目录起一个静态服务器（任意端口），并用 `SR_PORT` 告知测试：
+
+```bash
+python -m http.server 8795 &   # 或 npx serve . 等，端口任意
+SR_PORT=8795 NODE_PATH=<工作区>/node_modules node tests/ui-smoke.test.js
+SR_PORT=8795 NODE_PATH=<工作区>/node_modules node tests/architecture.test.js
+```
+
+注：Windows 本机若有系统代理（如 7897），Node 经 localhost 加载页面会被截断。测试前清空代理——用 `HTTP_PROXY= HTTPS_PROXY=` 前缀（**不要**用 `env -u HTTP_PROXY`，后者会吞掉 node 的 stdout）：
+
+```bash
+HTTP_PROXY= HTTPS_PROXY= SR_PORT=8795 NODE_PATH=<工作区>/node_modules node tests/architecture.test.js
+```
 
 ## 数据
 

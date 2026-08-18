@@ -216,3 +216,71 @@
 **边界**：回显只在夜间视图出现（每日一句只在夜间视图），符合「今晚回想今晨的自己」语义；白天开 App 进早晨视图本无此句可放，无需处理。`sw.js` 缓存 v8 → v9（改了 app.js/index.html/css，必须清旧缓存）。
 
 **回归**：`ui-smoke.test.js` +6 断言（morning-echo 存在/默认隐藏、pairMorningToNight 暴露、今天早晨→最新夜 id1、旧早晨→前驱夜 id2、孤立早晨不配对），总数 20 → 26。全四套 db30 + mvp17 + ui26 + sleepdate8 = 81 项通过。
+
+## D35. IndexedDB v2：新增 events 行为日志 store + 增量迁移（2026-08-19，Phase 2）
+
+**决定**：DB 版本 1 → 2。`onupgradeneeded` 增量创建 `events` store（keyPath `id` 自增，索引 `sessionId` / `date`），**只创建尚不存在的 store，绝不删除已有数据**。`addEvent` 接受 `{ sessionId?, date?, type, timestamp?, payload? }`，append-only。
+
+**理由**：产品核心是「发现什么干预对自己最有效」——这要求把每次睡前互动（入口来源、内容展示、原因选择、微行为、完成、重开…）作为不可变事件流记录，而非只存聚合后的 session。events 与 nightSessions 解耦：session 是「当晚结论」，events 是「当晚过程」，二者可独立演进，未来加新事件类型不碰旧 schema。增量迁移保证已装 PWA 的 v1 旧库升级时 nightSessions / content / settings / morningSessions 原样保留。
+
+**迁移验证**：`tests/architecture.test.js` 手动以 v1 打开库（不含 events）→ 经 `DB.ready()`（v2）触发迁移 → 断言旧 nightSessions 仍在、events store 可写。
+
+## D36. NightSession 生命周期（active/completed）+ AnchorProvider + #/night 深链（2026-08-19，Phase 3/4）
+
+**决定**：NightSession 新增 `status`（`active` / `completed`）、`sessionStartedAt`、`completedAt`、`source`。打开 Night 即建 `active` 会话（`ensureNightSession`）；点「开始睡觉」→ `completed`。同晚不重复：按 `date + status` 唯一，已完成则不新建，只重开。入口统一抽象为 `AnchorProvider`（`getCurrentSource()` 返回 `home_screen` / `shortcut` / `manual` / `notification` / `unknown`），深链 `#/night` 强制进入睡前流程（`enterNightViaDeepLink` → `ensureNightSession(true)` 重开今晚会话，记 `night_reopened`，不重复建）。
+
+**理由**：①「同晚不重复建 session」是数据正确性的底线——重复会话会让 History / 效果分析失真；②iOS standalone PWA **无下拉刷新**、自定义 scheme 无成功回调（见 D7/D32），不能再依赖 iPhone Shortcut 自动唤起；改为统一 `#/night` 深链后，任何平台（iOS / Android / 桌面）用同一个 URL 都能可靠进入睡前流程，`getCurrentSource` 记录来源为后续「哪种入口更能促成完成」的分析打底。
+
+**Web Push 预留**：当前**不实现**推送，但 events store + `source` 字段已为「推送打开率 → 完成率」分析留好数据基础；将来接 Web Push（`pushsubscription` 另存 settings）时可在不破坏 v2 schema 的前提下扩展。
+
+**回归**：`tests/architecture.test.js` 验证「深链 #/night 创建 active 会话」「已完成 Night 重复进入不重复建（count 不变）+ 重开为 active + 记 night_reopened」。
+
+## D37. ContentSelector 规则评分选择器（2026-08-19，Phase 5）
+
+**决定**：把夜间内容选取从 `app.js` 内联逻辑抽为独立纯模块 `js/content-selector.js`（`ContentSelector.selectForNight({ all, reasonIds, excludeIds, weights, rand })`）。评分 = `reasonMatch×3 + tagMatch×1 + baseWeight（weight 回退 priority）− usageCount×0.15 + 探索噪声`。`enabled !== false` 且 `modes` 含 `night` 才入池；`excludeIds`（本次会话 + 近 7 晚）整条排除；排除后池空则回退不过滤（内容库小时不出现「无内容可显」）；同分取最高分区随机选其一。`rand` 可注入，便于确定性测试。
+
+**理由**：内容选取是「状态→内容→行为→结果」闭环的关键一环，独立成模块后可与 app.js 解耦、纯函数便于测试（D23 的联动匹配规则在此落地）。`baseWeight` 优先 `weight`、回退 `priority` 兼容旧字段；探索噪声避免长期只推同一条。
+
+**回归**：`tests/architecture.test.js` 验证 reasonMatch 提分、baseWeight 回退、selectForNight 命中原因项、excludeIds 生效、池空回退、rand=0 确定性。
+
+## D38. Analytics 纯函数层（跨午夜安全）（2026-08-19，Phase 6）
+
+**决定**：新增 `js/analytics.js`（`Analytics`），纯函数、无副作用、便于测试。覆盖 `interventionDuration`（sessionStartedAt→completedAt，用真实时间戳差，跨午夜安全）、`targetDelay`（距目标就寝偏差，diff < −720 分钟 +1440 跨午夜修正）、`withinDays`、`aggregateReasons` / `aggregateActions` / `aggregateContent`、`bedtimeTrend`（含 `crossedMidnight` 标记，分钟 < 288 视为次日凌晨）、`medianMinute` / `minutesToHHMM`、`behaviorEffectiveness`。
+
+**理由**：效果与趋势计算应与 UI 解耦；所有时长/偏差以真实时间戳计算，不依赖字符串日期，天然跨午夜正确（凌晨入睡的场景由 `sleepDate` 归日前一天，但 actualSleepAt 是次日凌晨，两套机制互不打架）。History 的「四问」直接消费本层。
+
+**回归**：`tests/architecture.test.js` 验证跨午夜时长≈4h、targetDelay +180 / 跨午夜修正 +630、bedtimeTrend 升序与跨午夜标记、各聚合与 abandoned（缺 completedAt 时长 null）。
+
+## D39. History 四问总结 + 7/30 切换（2026-08-19，Phase 7）
+
+**决定**：History 顶部按 `Analytics` 答四问——「最常见熬夜原因 / 通常几点睡 / 最常尝试的微行为 / 这段时间节奏」，配 7 天 / 30 天切换（`historyRange`）。列表按 `withinDays` 过滤，保留原极简趋势文字（`renderHistoryTrend` 不删，MVP 测试依赖）。
+
+**理由**：PRD §3.3 允许「极简趋势」；把抽象数据落成四句事实陈述（只陈述不评价），最贴合「干预器」定位，又不滑向统计图表（见 PRD §7 非目标）。7/30 切换让用户自选观察窗口。
+
+**回归**：`tests/architecture.test.js` 聚合类断言覆盖；`tests/mvp.test.js` 仍验证 history 列表与趋势可见（未删）。
+
+## D40. Settings 内容管理增强（2026-08-19，Phase 8）
+
+**决定**：内容库管理从「增删」升级为「增 / 改 / 启用切换 / 标签 / 权重 / 过滤」。列表行显示原因·标签·权重·展示次数 meta；详情可编辑 `text` / `reasons` / `tags` / `weight` / `enabled`；`#content-filter` 按 all/enabled/disabled 过滤。`updateContent` 保留原 `id` / `createdAt` / `usageCount`，只更新字段 + `updatedAt`。
+
+**理由**：让内容真正可运营——权重可调优先级、enabled 可灰度、原因可参与 D37 的匹配。编辑保留不可变字段，避免误改主键与统计基数。
+
+**回归**：`tests/architecture.test.js` 未直接覆盖 UI 编辑（依赖 `tests/ui-smoke.test.js` 的既有按钮/可见性断言）；Phase 8 改用临时 `_set_check.js` 验证增/改/启用切换/过滤 11/11 后删除。
+
+## D41. SW App Shell 预缓存补全所有 JS 模块 + v10（2026-08-19，Phase 9）
+
+**决定**：`sw.js` 的 `SHELL` 预缓存列表补全 Phase 4–6 新增的 `js/anchor.js` / `js/content-selector.js` / `js/analytics.js`（此前遗漏，仅缓存了 content/db/app 三个），缓存版本 v9 → v10。
+
+**理由**：遗漏的模块在「首次离线直接打开」时会因未预缓存而加载失败，导致离线 Night 流程崩溃（anchor/content-selector/analytics 未定义）。补齐后 App Shell 自包含，离线可用、首屏秒开得以保证。SW 更新走 D32 的「应用内更新横幅 + SKIP_WAITING」策略，IndexedDB 与 SW 缓存相互独立，更新不丢数据。
+
+**回归**：`tests/architecture.test.js` 解析 `sw.js` 文本，断言 6 个 JS 模块均在 SHELL 预缓存且版本为 v10。
+
+## D42. addEvent 事件静默丢失 bug 修复 + architecture.test.js（54 项）（2026-08-19，Phase 10）
+
+**Bug（架构测试发现）**：`db.js` 的 `addEvent` 在无顶层 `date` 时回退调用 `todayStr()`，但 `todayStr` 定义在 `app.js` 的 IIFE 作用域内，`db.js` 不可见 → `ReferenceError` → 被调用处的 `.catch(() => {})` 静默吞掉。**结果是几乎所有事件（night_started / night_reopened / app_opened / content_shown / reason_selected / morning_opened 等，共 13 处调用绝大多数不带顶层 date）都没有写入 events store**，整个行为日志功能（D35 的核心交付）在生产环境实际失效。
+
+**修复**：`addEvent` 改为自包含——`date` 优先用显式传入值，否则取 `timestamp` 的日期部分（`ts.slice(0,10)`）；不再依赖任何外部函数。`timestamp` 默认当前时间，零外部耦合。
+
+**测试**：新增 `tests/architecture.test.js`（54 项），覆盖 D35–D41 全部验收点：v1→v2 迁移、events 读写、ContentSelector（含原因匹配/排除/回退/确定性）、Analytics（跨午夜/聚合/abandoned）、Export/Import（events 往返 + v1 备份兼容）、深链 #/night、已完成 Night 重复进入不重复建、SW 壳完整性。该测试直接暴露了上述 bug（night_started / night_reopened 断言原 FAIL，修复后 PASS）。为支持测试，加两个零副作用钩子：`db.js` 末 `if (typeof window !== "undefined") window.DB = DB;`，`app.js` `window.__enterNightViaDeepLink = enterNightViaDeepLink;`（与既有 `window.sleepDate` / `window.__pairMorningToNight` 同模式）。
+
+**回归**：5 套全绿，db30 + sleepdate8 + mvp17 + ui26 + architecture54 = 135 项；原 81 项全部保留未删。

@@ -1,11 +1,11 @@
 # Sleep Ritual — PRD
 
-> 版本：MVP v1（整理自 2026-08-16 项目初始化需求）
-> 状态：第一阶段开发中
+> 版本：v2（跨平台 PWA，local-first；整理自 2026-08-16 初始化需求 + 2026-08-19 架构升级）
+> 状态：可用（持续迭代）
 
 ## 1. 产品定位
 
-**睡前行为干预器**，运行在 iPhone 上的个人 PWA。
+**睡前行为干预器**，跨平台（iOS / Android / 桌面浏览器）的个人 PWA，local-first 运行。
 
 目标：减少主动熬夜行为。它不是睡眠记录 App，不关心睡得怎么样，只干预"睡之前那半个小时"。
 
@@ -13,7 +13,7 @@
 
 | 阶段 | 动作 |
 | --- | --- |
-| Anchor | 到达设定睡前时间，iPhone Shortcut 自动打开 Sleep Ritual |
+| Anchor | 到达设定睡前时间，通过入口来源进入 Sleep Ritual。入口统一抽象为 AnchorProvider（`home_screen` / `shortcut` / `manual` / `notification` / `unknown`），iOS 不再依赖 Shortcut 检测——统一用 `#/night` 深链进入，standalone 下也能稳定唤起 |
 | Buffer | 不说"赶快睡"，先问"我为什么现在还不想睡"，帮助用户理解自己 |
 | Transition | 极低成本的行为替代 → 微行为 → 进入 SleepTown |
 
@@ -106,7 +106,7 @@
 
 - 目标睡觉时间
 - 目标起床时间
-- 内容管理（增删）
+- 内容管理（增 / 改 / 启用切换 / 标签 / 权重 / 过滤；按原因匹配参与干预）
 - JSON 导出
 - JSON 导入
 - 数据清空
@@ -121,14 +121,15 @@
 
 ## 4. 数据模型（IndexedDB）
 
-DB：`sleep-ritual`，v1
+DB：`sleep-ritual`，v2（v1→v2 增量迁移，新增 `events` store，旧数据零丢失）
 
 | Store | keyPath | 索引 | 说明 |
 | --- | --- | --- | --- |
 | `settings` | `key` | — | 用户设置 |
-| `content` | `id` (auto) | — | 内容库 |
-| `nightSessions` | `id` (auto) | `date` | 每晚记录 |
+| `content` | `id` (auto) | — | 内容库（含 reasons / tags / weight / modes / enabled / usageCount） |
+| `nightSessions` | `id` (auto) | `date` | 每晚记录（含 status / sessionStartedAt / completedAt / source / shownContentIds） |
 | `morningSessions` | `id` (auto) | `date` | 早晨记录 |
+| `events` | `id` (auto) | `sessionId` / `date` | append-only 行为事件日志（Anchor / 内容展示 / 原因选择 / 完成 / 重开等） |
 
 ### settings
 
@@ -144,8 +145,15 @@ DB：`sleep-ritual`，v1
   "id": 1,
   "type": "quote | excerpt | self | tip",
   "text": "……",
+  "reasons": ["keep_scrolling", "not_over"],
+  "tags": ["主题标签（给人看，不参与机器匹配）"],
+  "weight": 1,
+  "modes": ["night"],
+  "enabled": true,
+  "usageCount": 0,
   "source": "可选来源",
-  "createdAt": "ISO 8601"
+  "createdAt": "ISO 8601",
+  "updatedAt": "ISO 8601"
 }
 ```
 
@@ -155,13 +163,21 @@ DB：`sleep-ritual`，v1
 {
   "id": 1,
   "date": "2026-08-16",
+  "status": "active | completed",
+  "sessionStartedAt": "2026-08-16T23:10:00.000Z",
+  "completedAt": "2026-08-16T23:41:22.000Z",
+  "source": "home_screen | shortcut | manual | notification | unknown",
   "bedTimeTarget": "23:30",
   "shownAt": null,
   "actualSleepAt": "2026-08-16T23:41:22.000Z",
   "contentId": null,
+  "shownContentIds": [1, 2],
   "reasons": ["keep_scrolling", "not_over"],
+  "selectedActionId": "act_keep_scrolling",
   "behaviorTip": "先把手机放远 1 米，够不到就行。",
-  "tonightMessage": "一句话"
+  "tonightMessage": "一句话",
+  "sleepTownAttempted": true,
+  "brainDumpUsed": false
 }
 ```
 
@@ -183,7 +199,8 @@ DB：`sleep-ritual`，v1
 
 - 纯 HTML / CSS / Vanilla JS，无框架、无构建
 - PWA：`manifest.webmanifest` + `sw.js`
-  - standalone、iPhone safe area、深色模式（Night 深色）、离线打开、首页秒开
+  - standalone、safe area（iOS / Android）、深色模式（Night 深色）、离线打开、首页秒开
+  - 跨平台：Anchor 抽象 + `#/night` 深链，iOS standalone 下也能稳定进入睡前流程，不依赖 Shortcut 自动唤起
 - 无后端、无登录、无数据库服务器、无云同步
 - JSON 导出 / 导入
 - 可部署 GitHub Pages
@@ -199,7 +216,7 @@ DB：`sleep-ritual`，v1
 
 ## 7. 非目标（v1 不做）
 
-- 统计图表与趋势分析
+- 统计图表与可视化大屏（History 内的「四问」极简文字总结与趋势属允许范围，不做图表）
 - 连续打卡 / 成就系统
 - AI 生成内容或 AI 对话
 - 多设备同步、账号系统
