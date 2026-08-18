@@ -148,30 +148,16 @@
     }
   }
 
-  /* 从内容池中按规则选取一条：
-     1. enabled 为 true（默认 true）
-     2. modes 含 "night"（缺省视为 night）
-     3. 命中所给 reasonIds 之一（reasonIds 为空 = 通用池）
-     4. 排除 excludeIds（最近展示过 / 本次会话展示过），池子空了则回退不过滤
-     5. 优先 priority 更大的；同优先级随机 */
+  /* 从内容池中按规则选取一条：委托 ContentSelector（规则评分版本）。
+     1. enabled 为 true（默认 true）且 modes 含 "night"
+     2. 原因命中 / 标签命中 / 基础权重 / 使用降权 / 探索噪声 加权
+     3. 排除 excludeIds（本次会话 + 近 7 晚已展示），池空回退不过滤
+     见 js/content-selector.js。 */
   function pickContent(all, reasonIds, excludeIds = null) {
-    const filtered = all.filter(
-      (c) =>
-        c.enabled !== false &&
-        (!c.modes || c.modes.includes("night")) &&
-        (!reasonIds || !reasonIds.length
-          ? true
-          : (c.reasons || []).some((r) => reasonIds.includes(r)))
-    );
-    let pool = filtered;
-    if (excludeIds && excludeIds.size) {
-      const rest = filtered.filter((c) => !excludeIds.has(c.id));
-      if (rest.length) pool = rest;
+    if (window.ContentSelector) {
+      return window.ContentSelector.selectForNight({ all, reasonIds, excludeIds });
     }
-    if (!pool.length) return null;
-    const maxPri = Math.max(...pool.map((c) => c.priority ?? 0));
-    const top = pool.filter((c) => (c.priority ?? 0) === maxPri);
-    return top[Math.floor(Math.random() * top.length)];
+    return null;
   }
 
   /* 最近 7 晚展示过的内容 id 集合（含本次会话），用于避免连续重复 */
