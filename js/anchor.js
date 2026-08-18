@@ -8,12 +8,15 @@
  * 3. 预留 notification：未来接入 Web Push 时，由 push 事件写入
  *    window.__launchSource = 'notification'，这里直接采用，无需改 app.js。
  *
- * getCurrentSource() 取值：
- *   home_screen  — 已安装 PWA（display-mode: standalone / iOS navigator.standalone）
- *   shortcut     — 经深链进入且处于 standalone（最可能是主屏快捷方式 / 书签深链）
- *   manual       — 浏览器普通打开、或深链但非 standalone（外部链接 / 书签）
- *   notification — 未来 Web Push 拉起（当前实现不会返回，除非注入 __launchSource）
- *   unknown      — 无法判断
+ * getCurrentSource() 取值（集中定义，禁止臆断）：
+ *   home_screen  — 已安装 PWA 且非深链进入（直接点击主屏图标）
+ *   deep_link    — 通过一个 Deep Link（如 #/night）进入；不据此臆断为 shortcut
+ *   manual       — 非 standalone 浏览器普通打开（外部链接 / 直接访问）
+ *   notification — 真实通知点击（仅当 __launchSource 显式注入，如未来 Web Push）
+ *   push         — 真实推送（仅当 __launchSource 显式注入）
+ *   shortcut     — 仅当 __launchSource 显式注入为 shortcut 才可记录；
+ *                  当前 iOS Shortcut 无法可靠识别，绝不根据 standalone+hash 臆断
+ *   unknown      — 无法判断（兜底）
  */
 (function (global) {
   "use strict";
@@ -45,19 +48,25 @@
     return { view, raw };
   }
 
-  /* 取入口来源。测试钩子 window.__launchSource 优先（也供未来 Web Push 注入）。 */
+  /* 取入口来源。测试钩子 window.__launchSource 优先（也供未来 Web Push 注入）。
+     规则：
+     - 显式注入（notification / push / shortcut）仅在确实可确认时使用；
+     - 有深链 → 至少能确认「从 Deep Link 进入」→ deep_link（不臆断为 shortcut）；
+     - 无深链的 standalone → home_screen（主屏图标）；
+     - 无深链的非 standalone → manual。
+     来源只是数据记录，不影响任何业务流程。 */
   function getCurrentSource() {
     if (global.__launchSource && typeof global.__launchSource === "string") {
       return global.__launchSource;
     }
     const link = parseHash();
     const deep = !!link.view;
-    if (isStandalone()) {
-      // standalone 下经深链进入 → 最可能是主屏快捷方式 / 书签深链
-      return deep ? "shortcut" : "home_screen";
+    if (!deep) {
+      // 无深链：standalone → 主屏图标；非 standalone → 浏览器普通打开
+      return isStandalone() ? "home_screen" : "manual";
     }
-    // 非 standalone：浏览器普通打开为 manual；深链也视为 manual（外部链接）
-    return "manual";
+    // 有深链：确认从一个 Deep Link 入口进入，但不能据此臆断为 iOS Shortcut
+    return "deep_link";
   }
 
   /* 消费深链：返回目标视图，并清理 hash 避免刷新重复触发。 */

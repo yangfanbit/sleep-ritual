@@ -354,7 +354,9 @@
   async function bindSleepButton() {
     $("#btn-sleep").addEventListener("click", async () => {
       const firstReason = selectedReasons.length ? selectedReasons[0] : null;
-      if (!currentNightId) await ensureNightSession();
+      // 终态（已完成）后「回到流程」再次就寝：用户主动记录，新建一条 active 会话，
+      // 不激活旧的 completed 会话（保持历史事实不可变）。
+      if (!currentNightId) await createNightSession();
       const prev = currentNightId
         ? await DB.getNightSessionById(currentNightId).catch(() => null)
         : null;
@@ -451,45 +453,25 @@
   window.__pairMorningToNight = pairMorningToNight;
   // 测试钩子：暴露深链进入睡前流程的入口，便于验证「已完成 Night 重复进入不重复建」
   window.__enterNightViaDeepLink = enterNightViaDeepLink;
+  // 测试钩子：暴露会话状态机判定（对生产逻辑无副作用）
+  window.canTransitionSessionStatus = canTransitionSessionStatus;
 
-  /* 确保本晚有一条 active 会话：打开 Night 即创建（记录 sessionStartedAt），
-     已完成则不再创建；同晚不重复（getActiveNightSession 按 date+status 唯一）。
-     force=true 用于深链 #/night 显式进入：若今晚已完成，重开该会话（不新建，
-     避免同晚重复），让用户重新走一遍睡前流程。 */
-  async function ensureNightSession(force) {
+  /* 会话状态机：集中定义允许的状态转换，避免在多处散落判断。
+     active    → completed / abandoned   允许
+     active    → active（同态/读取）     允许
+     completed → active                  普通流程禁止（已完成是不可覆盖的历史事实）
+     completed → abandoned               禁止
+     其它转换默认禁止。 */
+  function canTransitionSessionStatus(from, to) {
+    if (!from || !to) return false;
+    if (from === to) return true;
+    if (from === "active" && (to === "completed" || to === "abandoned")) return true;
+    return false; // completed 禁止转回 active / abandoned
+  }
+
+  /* 新建一条「今晚」的 active 会话（仅创建，不复用、不覆盖已完成会话）。 */
+  async function createNightSession() {
     const sd = sleepDate();
-    const active = await DB.getActiveNightSession(sd).catch(() => null);
-    if (active) {
-      currentNightId = active.id;
-      return active;
-    }
-    const last = await DB.getLatestNightSession().catch(() => null);
-    if (last && last.date === sd && last.status === "completed") {
-      if (!force) {
-        currentNightId = null;
-        return null;
-      }
-      // 深链显式重新进入：重开今晚已完成会话（不新建，避免同晚重复）
-      const reopened = Object.assign({}, last, {
-        status: "active",
-        sessionStartedAt: new Date().toISOString(),
-        completedAt: null,
-        actualSleepAt: null,
-        source: currentSource,
-      });
-      try {
-        await DB.updateNightSession(reopened);
-        currentNightId = last.id;
-        await DB.addEvent({
-          sessionId: currentNightId,
-          type: "night_reopened",
-          payload: { date: sd, source: currentSource },
-        }).catch(() => {});
-      } catch (e) {
-        console.error("重开夜间会话失败", e);
-      }
-      return reopened;
-    }
     const session = {
       date: sd,
       status: "active",
@@ -518,28 +500,49 @@
     return session;
   }
 
-  /* 深链 #/night 进入：强制进入睡前流程（即便今晚已 completed，也重开会话）。 */
+  /* 确保本晚有一条 active 会话供「睡前流程」使用：
+     - 已有 active → 复用（同晚不重复）
+     - 已有 completed → 保持 completed 不变，返回 null（调用方进入终态，不创建、不修改）
+     - 其它 → 新建 active 会话
+     注意：已完成会话绝不被普通流程重新激活（状态机约束）。 */
+  async function ensureNightSession() {
+    const sd = sleepDate();
+    const active = await DB.getActiveNightSession(sd).catch(() => null);
+    if (active) {
+      currentNightId = active.id;
+      return active;
+    }
+    const last = await DB.getLatestNightSession().catch(() => null);
+    // 已完成 / abandoned 会话不可转回 active —— 保持原样，返回 null（不创建、不修改）
+    if (last && last.date === sd && !canTransitionSessionStatus(last.status, "active")) {
+      currentNightId = null;
+      return null;
+    }
+    return await createNightSession();
+  }
+
+  /* 深链 #/night 进入：进入睡前流程。
+     若今晚已完成，则保持 completed 不变，进入「今晚已完成」终态，不创建新会话、不修改完成数据。 */
   async function enterNightViaDeepLink() {
     nightShownAt = new Date().toISOString();
-    currentNightId = null;
-    await ensureNightSession(true);
-    showNightFlow();
+    currentNightId =  null;
+    const session = await ensureNightSession();
+    if (session) {
+      showNightFlow();
+    } else {
+      // 已完成（或异常）：保持 completed 不变，进入终态
+      showGoodnight();
+    }
     if (window.AnchorProvider) window.AnchorProvider.clearHash();
   }
 
   /* 判断"今晚是否已经睡过"：基于 active/completed 状态，而非仅日期相等。 */
   async function resumeNightState() {
     nightShownAt = new Date().toISOString();
-    const sd = sleepDate();
     try {
-      const last = await DB.getLatestNightSession();
-      if (last && last.date === sd && last.status === "completed") {
-        currentNightId = null;
-        showGoodnight();
-        return;
-      }
-      await ensureNightSession();
-      showNightFlow();
+      const session = await ensureNightSession();
+      if (session) showNightFlow();
+      else showGoodnight(); // 已完成 → 终态
     } catch (e) {
       showNightFlow();
     }

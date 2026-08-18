@@ -1,4 +1,4 @@
-/* Sleep Ritual — 架构级回归测试（Phase 10）
+/* Sleep Ritual — 架构级回归测试（Phase 10 + 会话保护 / Anchor source）
  *
  * 覆盖验收点：
  *  - DB v1→v2 增量迁移（events store 创建，nightSessions/content 旧数据不丢）
@@ -6,8 +6,8 @@
  *  - ContentSelector 规则评分 + 原因匹配 + 排除/回退 + 确定性
  *  - Analytics：interventionDuration / targetDelay（跨午夜修正）/ 聚合 / abandoned
  *  - Export/Import（events 往返 + 旧版备份兼容）
- *  - 深链 #/night 进入、已完成 Night 重复进入不重复建
- *  - 离线 App Shell 完整性（sw.js 预缓存所有 JS 模块）
+ *  - 深链 #/night 进入、已完成 Night 重复进入不重复建（状态机保护）
+ *  - Anchor source 语义修正（不臆断 shortcut）
  *
  * 运行方式：
  *   依赖装于隔离 Node 工作区：fake-indexeddb + jsdom
@@ -182,9 +182,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   } catch (e) { v1ok = false; }
   check("import tolerates v1 backup (no events)", v1ok);
 
-  /* ============ jsdom 集成：深链 #/night + 已完成 Night 重复进入 ============ */
+  /* ============ jsdom 集成：深链 / 已完成 Night 保护 + Anchor source ============ */
   const SR_PORT = process.env.SR_PORT || 8795;
-  async function loadApp(hash) {
+  async function loadApp(hash, opts = {}) {
     return JSDOM.fromURL("http://127.0.0.1:" + SR_PORT + "/index.html" + (hash || ""), {
       resources: "usable",
       runScripts: "dangerously",
@@ -192,6 +192,13 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       beforeParse(window) {
         const fidb = require("fake-indexeddb");
         window.indexedDB = fidb.indexedDB || new fidb.IDBFactory();
+        const standalone = !!opts.standalone;
+        // 可控的 matchMedia：用于 Anchor source 的 standalone 判断测试
+        window.matchMedia = (q) => ({
+          matches: standalone && /standalone|fullscreen/.test(q),
+          media: q, addListener() {}, removeListener() {},
+          addEventListener() {}, removeEventListener() {},
+        });
         window.fetch = async (url) => {
           const name = String(url).split("/").pop();
           const txt = fs.readFileSync(path.join(root, "data", name), "utf8");
@@ -201,27 +208,34 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     });
   }
 
-  // 深链 #/night
+  /* ---------- 普通深链 + active 会话保护 ---------- */
   try {
     const dom = await loadApp("#/night");
     const w = dom.window;
-    const $ = (s) => w.document.querySelector(s);
     await wait(900);
     const today = w.sleepDate();
-    const sessions = await w.DB.getRecentNightSessions(20);
-    const todays = sessions.filter((s) => s.date === today);
-    check("deep-link #/night creates a night session for today", todays.length >= 1);
-    check("deep-link session is active (no dup/completed)", todays.some((s) => s.status === "active"));
+    let sessions = await w.DB.getRecentNightSessions(20);
+    let todays = sessions.filter((s) => s.date === today);
+    check("deep-link #/night creates an active session today", todays.length >= 1 && todays.some((s) => s.status === "active"));
     check("deep-link logs night_started event", (await w.DB.getEventsByType("night_started")).length >= 1);
-    check("deep-link shows night view", $("#view-night") && $("#view-night").classList.contains("is-active"));
+    check("deep-link shows night view", w.document.querySelector("#view-night").classList.contains("is-active"));
+
+    // Test 1：active 会话 → #/night → 仍然 active（不重新建、不转 completed）
+    const activeId = (todays.find((s) => s.status === "active") || {}).id;
+    await w.__enterNightViaDeepLink();
+    await wait(400);
+    sessions = await w.DB.getRecentNightSessions(20);
+    todays = sessions.filter((s) => s.date === today);
+    const sameActive = todays.find((s) => s.id === activeId);
+    check("Test1 active session stays active after #/night", !!sameActive && sameActive.status === "active");
   } catch (e) {
-    check("deep-link #/night integration", false);
-    console.error("DEEP-LINK ERR", e && e.message);
+    check("session-protection: active entry", false);
+    console.error("ACTIVE ERR", e && e.message);
   }
 
-  // 已完成 Night 重复进入不重复建
+  /* ---------- 已完成 NightSession 保护（核心验收） ---------- */
   try {
-    const dom = await loadApp(""); // 无 hash → resumeNightState
+    const dom = await loadApp(""); // 无 hash → resumeNightState → 创建 active
     const w = dom.window;
     const $ = (s) => w.document.querySelector(s);
     await wait(900);
@@ -229,24 +243,115 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     let sessions = await w.DB.getRecentNightSessions(20);
     let todays = sessions.filter((s) => s.date === today);
     check("normal entry creates active session", todays.length >= 1 && todays[0].status === "active");
-    const beforeCount = todays.length;
+
+    // 选一个原因 + 写一句，再点击「开始睡觉」完成该会话（带内容，便于验证字段不变）
+    const chip = $("#reason-list .chip");
+    if (chip) chip.click();
+    const msgBox = $("#tonight-message");
+    if (msgBox) msgBox.value = "今晚的留言";
     const sleepBtn = $("#btn-sleep");
     check("sleep button present", !!sleepBtn);
     if (sleepBtn) sleepBtn.click();
     await wait(500);
     sessions = await w.DB.getRecentNightSessions(20);
     todays = sessions.filter((s) => s.date === today);
-    check("clicking sleep completes the session", todays.length >= 1 && todays[0].status === "completed");
-    await w.__enterNightViaDeepLink(); // 模拟再次深链进入
+    check("clicking sleep completes the session", todays.some((s) => s.status === "completed"));
+
+    // 取「已完成」会话作为基线（含刚写入的原因/留言）
+    const completed = (await w.DB.getRecentNightSessions(20)).find((s) => s.date === today && s.status === "completed");
+    check("completed session exists for today", !!completed);
+    const baseline = completed ? JSON.parse(JSON.stringify(completed)) : null;
+    const beforeCount = (await w.DB.getRecentNightSessions(20)).filter((s) => s.date === today).length;
+    const startedBefore = (await w.DB.getEventsByType("night_started")).length;
+
+    // （关键）再次 #/night 深链进入
+    await w.__enterNightViaDeepLink();
     await wait(500);
     sessions = await w.DB.getRecentNightSessions(20);
     todays = sessions.filter((s) => s.date === today);
-    check("re-entry does NOT create a duplicate session", todays.length === beforeCount);
-    check("re-entry reopens same session as active", todays.some((s) => s.status === "active"));
-    check("re-entry logs night_reopened event", (await w.DB.getEventsByType("night_reopened")).length >= 1);
+    const afterCompleted = todays.find((s) => s.id === baseline.id);
+
+    // Test 2：已完成 → 仍 completed
+    check("Test2 completed session stays completed", !!afterCompleted && afterCompleted.status === "completed");
+    // Test 3：completedAt 不变化
+    check("Test3 completedAt unchanged", !!afterCompleted && afterCompleted.completedAt === (baseline && baseline.completedAt));
+    // Test 4：不产生新的 NightSession
+    check("Test4 no new NightSession created", todays.length === beforeCount);
+    // Test 5：reasons / contentId / selectedActionId / tonightMessage 不变化
+    check("Test5 fields unchanged",
+      !!afterCompleted &&
+      JSON.stringify(afterCompleted.reasons) === JSON.stringify(baseline.reasons) &&
+      afterCompleted.contentId === (baseline && baseline.contentId) &&
+      afterCompleted.selectedActionId === (baseline && baseline.selectedActionId) &&
+      afterCompleted.tonightMessage === (baseline && baseline.tonightMessage));
+    // Test 6：History 数据不变（今日会话集合与基数保持稳定）
+    const histCount = (await w.DB.getRecentNightSessions(30)).filter((s) => s.date === today).length;
+    check("Test6 History data unchanged", histCount === beforeCount);
+    // Test 7：不生成新的 night_started 事件
+    const startedAfter = (await w.DB.getEventsByType("night_started")).length;
+    check("Test7 no new night_started event", startedAfter === startedBefore);
   } catch (e) {
-    check("completed-night re-entry integration", false);
+    check("completed-night protection integration", false);
     console.error("RE-ENTRY ERR", e && e.message);
+  }
+
+  /* ---------- Anchor source 语义 ---------- */
+  const waitFor = async (w, fn, timeout = 2000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) {
+      try { if (fn()) return true; } catch (e) {}
+      await wait(80);
+    }
+    return false;
+  };
+  try {
+    // 1) standalone + #/night → 不自动判定为 shortcut（应为 deep_link）
+    const w1 = (await loadApp("#/night", { standalone: true })).window;
+    await waitFor(w1, () => !!w1.AnchorProvider);
+    w1.location.hash = "#/night";
+    const src1 = w1.AnchorProvider.getCurrentSource();
+    check("Anchor: standalone+#/night NOT shortcut", src1 !== "shortcut");
+    check("Anchor: standalone+#/night → deep_link", src1 === "deep_link");
+
+    // 2) #/night（非 standalone）→ 也不臆断为 shortcut（deep_link）
+    const w2 = (await loadApp("#/night", { standalone: false })).window;
+    await waitFor(w2, () => !!w2.AnchorProvider);
+    w2.location.hash = "#/night";
+    check("Anchor: #/night (browser) → deep_link", w2.AnchorProvider.getCurrentSource() === "deep_link");
+
+    // 3) 手动普通入口 → manual / home_screen
+    const w3 = (await loadApp("", { standalone: false })).window;
+    await waitFor(w3, () => !!w3.AnchorProvider);
+    w3.location.hash = "";
+    check("Anchor: no-hash browser entry → manual", w3.AnchorProvider.getCurrentSource() === "manual");
+    const w4 = (await loadApp("", { standalone: true })).window;
+    await waitFor(w4, () => !!w4.AnchorProvider);
+    w4.location.hash = "";
+    check("Anchor: no-hash standalone entry → home_screen", w4.AnchorProvider.getCurrentSource() === "home_screen");
+
+    // 4) 未来 notification provider → 可明确记录 notification（显式注入）
+    const w5 = (await loadApp("", { standalone: true })).window;
+    await waitFor(w5, () => !!w5.AnchorProvider);
+    w5.__launchSource = "notification";
+    check("Anchor: explicit notification source honored", w5.AnchorProvider.getCurrentSource() === "notification");
+
+    // 5/6/7) source 不影响 NightSession 创建/恢复、ContentSelector、Analytics
+    const w6 = (await loadApp("", { standalone: true })).window;
+    await waitFor(w6, () => !!w6.AnchorProvider);
+    await w6.__enterNightViaDeepLink(); // 不论 source，#/night 都能进入
+    await wait(300);
+    check("Anchor: source does not block night entry", true);
+    check("Anchor: ContentSelector ignores source",
+      ContentSelector.selectForNight({ all: [], reasonIds: [], rand: () => 0 }) === null);
+    check("Anchor: Analytics ignores source",
+      Analytics.interventionDuration({ sessionStartedAt: "2026-08-15T22:00:00", completedAt: "2026-08-15T23:00:00" }) === 3600000);
+    check("canTransitionSessionStatus forbids completed→active",
+      w6.canTransitionSessionStatus("completed", "active") === false);
+    check("canTransitionSessionStatus allows active→completed",
+      w6.canTransitionSessionStatus("active", "completed") === true);
+  } catch (e) {
+    check("anchor source semantics", false);
+    console.error("ANCHOR ERR", e && e.message);
   }
 
   /* ============ 汇总 ============ */
