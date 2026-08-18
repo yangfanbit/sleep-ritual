@@ -149,10 +149,19 @@
       </label>
 
       <h2 class="section-title">内容库</h2>
-      <p class="section-hint">每晚只随机展示一条。可以在这里增删。</p>
+      <p class="section-hint">每晚随机展示一条。可增删、启停、按原因 / 标签定向、调权重。</p>
+      <div class="content-toolbar">
+        <label class="field-inline">筛选
+          <select id="content-filter" class="select select-small">
+            <option value="all">全部</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已停用</option>
+          </select>
+        </label>
+      </div>
       <div id="content-list" class="content-list"></div>
-      <details class="content-add">
-        <summary class="btn btn-ghost btn-small">添加一条内容</summary>
+      <details class="content-add" id="content-editor" open>
+        <summary class="btn btn-ghost btn-small" id="content-editor-summary">添加一条内容</summary>
         <select id="content-type" class="select">
           <option value="quote">一句话（quote）</option>
           <option value="excerpt">文章摘录（excerpt）</option>
@@ -161,9 +170,15 @@
         </select>
         <textarea id="content-text" class="textarea" rows="2" placeholder="内容文本"></textarea>
         <input id="content-source" class="input" type="text" placeholder="来源（可选）" />
+        <label class="field-inline"><input id="content-enabled" type="checkbox" checked /> 启用（停用后不再展示）</label>
+        <label class="field-inline">权重 <input id="content-weight" type="number" min="0" step="1" value="1" class="input input-small" /></label>
+        <input id="content-tags" class="input" type="text" placeholder="标签，逗号分隔（可选）" />
         <p class="content-reasons-label">适用原因（可多选；不选则通用展示）</p>
         <div id="content-reason-chips" class="chips chips-inline" role="group" aria-label="适用原因"></div>
-        <button id="btn-content-add" class="btn btn-ghost" type="button">存入</button>
+        <div class="content-editor-actions">
+          <button id="btn-content-save" class="btn btn-ghost" type="button">存入</button>
+          <button id="btn-content-cancel" class="btn btn-ghost" type="button" hidden>取消编辑</button>
+        </div>
       </details>
 
       <h2 class="section-title">数据</h2>

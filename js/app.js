@@ -874,9 +874,17 @@
     const wrap = $("#content-list");
     wrap.innerHTML = "";
     const all = await DB.getAllContent().catch(() => []);
-    all.forEach((item) => {
+    const filtered = all.filter((c) => {
+      if (contentFilter === "enabled") return c.enabled !== false;
+      if (contentFilter === "disabled") return c.enabled === false;
+      return true;
+    });
+    filtered.forEach((item) => {
       const row = document.createElement("div");
-      row.className = "content-row";
+      row.className = "content-row" + (item.enabled === false ? " is-disabled" : "");
+
+      const main = document.createElement("div");
+      main.className = "c-main";
 
       const type = document.createElement("span");
       type.className = "c-type";
@@ -886,6 +894,48 @@
       text.className = "c-text";
       text.textContent = item.text;
 
+      const meta = document.createElement("div");
+      meta.className = "c-meta";
+      const bits = [];
+      if (item.reasons && item.reasons.length) {
+        bits.push(
+          "原因 " +
+            item.reasons
+              .map((id) => ((REASONS.find((r) => r.id === id) || {}).label || id))
+              .join("/")
+        );
+      }
+      if (item.tags && item.tags.length) bits.push("标签 " + item.tags.join("/"));
+      bits.push("权重 " + (item.weight != null ? item.weight : 1));
+      bits.push("展示 " + (item.usageCount || 0));
+      meta.textContent = bits.join("　");
+
+      main.appendChild(type);
+      main.appendChild(text);
+      main.appendChild(meta);
+      row.appendChild(main);
+
+      const actions = document.createElement("div");
+      actions.className = "c-actions";
+
+      const en = document.createElement("label");
+      en.className = "c-enable";
+      en.title = "启用 / 停用";
+      const enBox = document.createElement("input");
+      enBox.type = "checkbox";
+      enBox.checked = item.enabled !== false;
+      enBox.addEventListener("change", async () => {
+        await DB.updateContent(Object.assign({}, item, { enabled: enBox.checked }));
+        renderContentList();
+      });
+      en.appendChild(enBox);
+
+      const edit = document.createElement("button");
+      edit.className = "c-edit";
+      edit.type = "button";
+      edit.textContent = "编辑";
+      edit.addEventListener("click", () => startEditContent(item));
+
       const del = document.createElement("button");
       del.className = "c-del";
       del.type = "button";
@@ -893,18 +943,56 @@
       del.title = "删除";
       del.addEventListener("click", async () => {
         await DB.deleteContent(item.id);
+        if (editingContentId === item.id) cancelEditContent();
         renderContentList();
       });
 
-      row.appendChild(type);
-      row.appendChild(text);
-      row.appendChild(del);
+      actions.appendChild(en);
+      actions.appendChild(edit);
+      actions.appendChild(del);
+      row.appendChild(actions);
+
       wrap.appendChild(row);
     });
   }
 
+  function startEditContent(item) {
+    editingContentId = item.id;
+    $("#content-type").value = item.type;
+    $("#content-text").value = item.text;
+    $("#content-source").value = item.source || "";
+    $("#content-enabled").checked = item.enabled !== false;
+    $("#content-weight").value = item.weight != null ? item.weight : 1;
+    $("#content-tags").value = (item.tags || []).join("、");
+    selectedContentReasons = [...(item.reasons || [])];
+    renderContentReasonChips();
+    $("#btn-content-save").textContent = "保存修改";
+    $("#content-editor-summary").textContent = "编辑内容";
+    $("#btn-content-cancel").hidden = false;
+    const ed = $("#content-editor");
+    if (ed && !ed.open) ed.open = true;
+    $("#content-text").focus();
+  }
+
+  function cancelEditContent() {
+    editingContentId = null;
+    $("#content-type").value = "quote";
+    $("#content-text").value = "";
+    $("#content-source").value = "";
+    $("#content-enabled").checked = true;
+    $("#content-weight").value = 1;
+    $("#content-tags").value = "";
+    selectedContentReasons = [];
+    renderContentReasonChips();
+    $("#btn-content-save").textContent = "存入";
+    $("#content-editor-summary").textContent = "添加一条内容";
+    $("#btn-content-cancel").hidden = true;
+  }
+
   /* 设置页：新增内容的适用原因多选（不选 = 通用展示） */
   let selectedContentReasons = [];
+  let editingContentId = null; // 正在编辑的内容 id（null = 新增模式）
+  let contentFilter = "all"; // 内容库筛选：all / enabled / disabled
 
   function renderContentReasonChips() {
     const wrap = $("#content-reason-chips");
@@ -939,20 +1027,36 @@
       DB.setSetting("waketime", e.target.value)
     );
 
-    $("#btn-content-add").addEventListener("click", async () => {
+    $("#btn-content-save").addEventListener("click", async () => {
       const text = $("#content-text").value.trim();
       if (!text) return;
-      await DB.addContent({
+      const tags = $("#content-tags")
+        .value.split(/[，,]/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const base = {
         type: $("#content-type").value,
         text,
         source: $("#content-source").value.trim(),
         reasons: [...selectedContentReasons],
-        enabled: true,
-      });
-      $("#content-text").value = "";
-      $("#content-source").value = "";
-      selectedContentReasons = [];
-      renderContentReasonChips();
+        enabled: $("#content-enabled").checked,
+        weight: Number($("#content-weight").value) || 1,
+        tags,
+      };
+      if (editingContentId) {
+        const orig = (await DB.getAllContent()).find((c) => c.id === editingContentId);
+        await DB.updateContent(Object.assign({}, orig, base, { id: editingContentId }));
+      } else {
+        await DB.addContent(base);
+      }
+      cancelEditContent();
+      renderContentList();
+    });
+
+    $("#btn-content-cancel").addEventListener("click", cancelEditContent);
+
+    $("#content-filter").addEventListener("change", (e) => {
+      contentFilter = e.target.value;
       renderContentList();
     });
 

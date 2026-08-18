@@ -580,6 +580,23 @@ body {
 .summary-title { font-size: 0.75rem; color: var(--text-night-dim); margin-bottom: 0.35rem; }
 .summary-body { font-size: 0.95rem; line-height: 1.5; color: var(--text-night-main); }
 
+.content-toolbar { margin-top: 1rem; }
+.field-inline { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--text-night-dim); }
+.select-small, .input-small { padding: 0.3rem 0.5rem; font-size: 0.8rem; border-radius: 8px; border: 1px solid var(--bg-night-raise); background: var(--bg-night); color: var(--text-night-main); }
+.input-small { width: 4rem; }
+
+.content-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; padding: 0.8rem 0.9rem; background: var(--bg-night-raise); border-radius: var(--radius); }
+.content-row.is-disabled { opacity: 0.5; }
+.c-main { min-width: 0; }
+.c-type { display: inline-block; font-size: 0.7rem; color: var(--text-night-dim); border: 1px solid var(--bg-night); border-radius: 6px; padding: 0 0.35rem; margin-right: 0.4rem; }
+.c-text { font-size: 0.9rem; color: var(--text-night-main); }
+.c-meta { font-size: 0.72rem; color: var(--text-night-dim); margin-top: 0.3rem; line-height: 1.6; }
+.c-actions { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.c-enable { display: inline-flex; align-items: center; cursor: pointer; }
+.c-edit { font-size: 0.78rem; color: var(--text-night-mid); background: transparent; border: none; cursor: pointer; text-decoration: underline; }
+.c-del { font-size: 1rem; line-height: 1; color: var(--text-night-dim); background: transparent; border: none; cursor: pointer; }
+.content-editor-actions { display: flex; gap: 0.6rem; margin-top: 0.6rem; }
+
 .field {
   display: flex;
   align-items: center;
