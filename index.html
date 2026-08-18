@@ -122,7 +122,15 @@
     <section id="view-history" class="view" aria-label="历史记录">
       <h1 class="page-title">记录</h1>
       <p class="section-hint">只是看看，没有评价。</p>
+
+      <div id="history-range" class="history-range" role="group" aria-label="时间范围">
+        <button class="range-btn is-active" type="button" data-range="7">近 7 天</button>
+        <button class="range-btn" type="button" data-range="30">近 30 天</button>
+      </div>
+
+      <div id="history-summary" class="history-summary" hidden></div>
       <p id="history-trend" class="history-trend" hidden></p>
+
       <div id="history-list" class="history-list"></div>
       <p id="history-empty" class="empty-hint">还没有记录。今晚开始。</p>
     </section>

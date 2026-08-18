@@ -553,6 +553,33 @@ body {
 }
 .empty-hint { text-align: center; color: var(--text-night-dim); margin-top: 3rem; }
 
+.history-range { display: flex; gap: 0.5rem; margin-top: 1.2rem; }
+.range-btn {
+  flex: 1;
+  padding: 0.55rem 0;
+  border: 1px solid var(--bg-night-raise);
+  background: transparent;
+  color: var(--text-night-dim);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.range-btn.is-active { background: var(--bg-night-raise); color: var(--text-night-main); }
+
+.history-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.summary-block {
+  padding: 0.9rem 1rem;
+  background: var(--bg-night-raise);
+  border-radius: var(--radius);
+}
+.summary-title { font-size: 0.75rem; color: var(--text-night-dim); margin-bottom: 0.35rem; }
+.summary-body { font-size: 0.95rem; line-height: 1.5; color: var(--text-night-main); }
+
 .field {
   display: flex;
   align-items: center;

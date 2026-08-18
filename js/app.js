@@ -700,6 +700,95 @@
     return map;
   }
 
+  let historyRange = 7; // History 时间范围（7 / 30 天），由切换按钮控制
+
+  /* 四问摘要：用 Analytics 聚合，只呈现事实、不做评价。 */
+  async function renderHistorySummary(nights, mornings, rangeDays) {
+    const el = $("#history-summary");
+    if (!el) return;
+    const inRange = nights.filter(
+      (n) => window.Analytics && Analytics.withinDays(n, rangeDays)
+    );
+    if (!inRange.length) {
+      el.hidden = true;
+      el.innerHTML = "";
+      return;
+    }
+    const bedtime = await DB.getSetting("bedtime", "23:30").catch(() => "23:30");
+    const reasons = Analytics.aggregateReasons(inRange);
+    const trend = Analytics.bedtimeTrend(inRange);
+    const median = Analytics.medianMinute(
+      trend.map((t) => t.minutes + (t.crossedMidnight ? 1440 : 0))
+    );
+    const nightsById = {};
+    inRange.forEach((n) => (nightsById[n.id] = n));
+    const morningByNightId = pairMorningToNight(inRange, mornings);
+    const eff = Analytics.behaviorEffectiveness(nightsById, morningByNightId);
+    const actions = Analytics.aggregateActions(inRange);
+    const delays = inRange
+      .map((n) => Analytics.targetDelay(n, bedtime))
+      .filter((d) => d != null);
+    const avgDelay = delays.length
+      ? Math.round(delays.reduce((a, b) => a + b, 0) / delays.length)
+      : null;
+
+    const reasonLabel = (id) => (REASONS.find((r) => r.id === id) || {}).label || id;
+    const actionLabel = (id) => {
+      const rid = Object.keys(ACTION_IDS).find((k) => ACTION_IDS[k] === id);
+      return rid ? reasonLabel(rid) : id;
+    };
+
+    const blocks = [];
+    if (reasons.length) {
+      blocks.push(
+        summaryBlock("最常见的熬夜原因", `${reasonLabel(reasons[0].id)}（${reasons[0].count} 晚）`)
+      );
+    }
+    if (median != null) {
+      blocks.push(summaryBlock("通常几点放下手机", Analytics.minutesToHHMM(median)));
+    }
+    if (actions.length) {
+      let txt = actionLabel(actions[0].id);
+      const e = eff.find((x) => x.id === actions[0].id);
+      if (e && e.total) {
+        const okRate = Math.round(((e.good + e.ok) / e.total) * 100);
+        txt += `（试过 ${e.total} 晚，其中 ${okRate}% 早晨状态尚可）`;
+      }
+      blocks.push(summaryBlock("最常尝试的微行为", txt));
+    }
+    {
+      let txt = `近 ${rangeDays} 天记录 ${inRange.length} 晚`;
+      if (avgDelay != null) {
+        txt += avgDelay >= 0 ? `，平均比目标晚 ${avgDelay} 分钟` : `，平均比目标早 ${-avgDelay} 分钟`;
+      }
+      blocks.push(summaryBlock("这段时间的节奏", txt));
+    }
+
+    el.innerHTML = blocks.join("");
+    el.hidden = false;
+  }
+
+  function summaryBlock(title, body) {
+    return (
+      `<div class="summary-block">` +
+      `<div class="summary-title">${title}</div>` +
+      `<div class="summary-body">${body}</div>` +
+      `</div>`
+    );
+  }
+
+  function bindHistoryRange() {
+    const btns = $$("#history-range .range-btn");
+    if (!btns.length) return;
+    btns.forEach((b) =>
+      b.addEventListener("click", () => {
+        historyRange = Number(b.dataset.range) || 7;
+        btns.forEach((x) => x.classList.toggle("is-active", x === b));
+        if ($("#view-history").classList.contains("is-active")) renderHistory();
+      })
+    );
+  }
+
   async function renderHistory() {
     const [nights, mornings] = await Promise.all([
       DB.getRecentNightSessions(30).catch(() => []),
@@ -708,13 +797,17 @@
     // 时间邻近配对，避免夜/晨日期锚点不同造成配错位（显示旧内容）
     const morningByNightId = pairMorningToNight(nights, mornings);
 
-    renderHistoryTrend(nights);
+    renderHistoryTrend(nights); // 兼容既有极简趋势行（mvp 测试依赖）
+    await renderHistorySummary(nights, mornings, historyRange);
 
     const wrap = $("#history-list");
     wrap.innerHTML = "";
-    $("#history-empty").hidden = nights.length > 0;
+    const shown = nights.filter(
+      (n) => window.Analytics && Analytics.withinDays(n, historyRange)
+    );
+    $("#history-empty").hidden = shown.length > 0;
 
-    nights.forEach((n) => {
+    shown.forEach((n) => {
       const div = document.createElement("div");
       div.className = "history-item";
 
@@ -973,6 +1066,7 @@
     bindMood();
     bindMorningSave();
     bindSettings();
+    bindHistoryRange();
     registerSW();
 
     // 入口来源：集中到 AnchorProvider（平台判断不再散落各处）
