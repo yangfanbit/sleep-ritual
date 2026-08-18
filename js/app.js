@@ -449,6 +449,8 @@
   window.sleepDate = sleepDate;
   // 测试钩子：暴露夜/晨配对纯函数供单元测试（对生产逻辑无副作用）
   window.__pairMorningToNight = pairMorningToNight;
+  // 测试钩子：暴露深链进入睡前流程的入口，便于验证「已完成 Night 重复进入不重复建」
+  window.__enterNightViaDeepLink = enterNightViaDeepLink;
 
   /* 确保本晚有一条 active 会话：打开 Night 即创建（记录 sessionStartedAt），
      已完成则不再创建；同晚不重复（getActiveNightSession 按 date+status 唯一）。

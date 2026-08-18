@@ -229,11 +229,15 @@ const DB = {
      返回自动生成的 id（供 UI / 测试关联）。 */
   async addEvent(event) {
     const db = await this.ready();
+    // 自行推导 date：优先用显式传入的，否则取时间戳的日期部分（YYYY-MM-DD）。
+    // 不依赖外部 todayStr（它在 app.js 的 IIFE 作用域内，db.js 不可见，
+    // 否则无顶层 date 的事件会静默丢失）。timestamp 默认当前时间。
+    const ts = event.timestamp != null ? event.timestamp : new Date().toISOString();
     const ev = {
       sessionId: event.sessionId != null ? event.sessionId : null,
-      date: event.date != null ? event.date : todayStr(),
+      date: event.date != null ? event.date : ts.slice(0, 10),
       type: event.type,
-      timestamp: event.timestamp != null ? event.timestamp : new Date().toISOString(),
+      timestamp: ts,
       payload: event.payload != null ? event.payload : null,
     };
     const s = db.transaction("events", "readwrite").objectStore("events");
@@ -323,3 +327,7 @@ const DB = {
     await clear("events");
   },
 };
+
+// 测试/调试钩子：把本地 DB 句柄挂到 window（对生产逻辑无副作用）。
+// 用 typeof 守护，避免在 Node 测试上下文（无 window）下报错。
+if (typeof window !== "undefined") window.DB = DB;
