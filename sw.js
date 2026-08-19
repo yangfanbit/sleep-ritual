@@ -2,14 +2,16 @@
    策略：App Shell 预缓存（cache-first），其余请求网络优先并回退缓存。
    保证离线可打开、首页秒开。 */
 
-const CACHE = "sleep-ritual-v10";
+const CACHE = "sleep-ritual-v11";
 const SHELL = [
   "./",
   "./index.html",
   "./css/styles.css",
   // 所有 JS 模块都必须进 App Shell 预缓存：
-  // anchor/content-selector/analytics 是 Phase 4–6 新增，
-  // 若遗漏，离线打开 Night 页会因 window.* 未定义而崩溃。
+  // date-utils 是统一日期工具（cutoff/本地日期/安全格式化），其余模块依赖它；
+  // anchor/content-selector/analytics 是 Phase 4–6 新增；
+  // 若遗漏任一，离线打开对应页面会因 window.* 未定义而崩溃。
+  "./js/date-utils.js",
   "./js/content.js",
   "./js/db.js",
   "./js/anchor.js",

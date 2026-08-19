@@ -11,6 +11,11 @@
 
   function pad2(n) { return n < 10 ? "0" + n : "" + n; }
 
+  /* 放下手机时间：新字段 phoneDownAt 优先，兼容旧字段 actualSleepAt。 */
+  function phoneDownAtOf(night) {
+    return (night && (night.phoneDownAt || night.actualSleepAt)) || null;
+  }
+
   function parseDate(str) {
     const [y, m, d] = String(str).split("-").map(Number);
     return new Date(y, m - 1, d);
@@ -48,8 +53,9 @@
      跨午夜安全：若 actualSleepAt 远早于 target（次日凌晨），+1440 修正。
      bedtime 形如 "23:30"。缺字段返回 null。 */
   function targetDelay(night, bedtime) {
-    if (!night || !night.actualSleepAt || !bedtime) return null;
-    const sleep = new Date(night.actualSleepAt).getTime();
+    const sleepAt = phoneDownAtOf(night);
+    if (!night || !sleepAt || !bedtime) return null;
+    const sleep = new Date(sleepAt).getTime();
     if (isNaN(sleep)) return null;
     const target = timeToDate(night.date, bedtime).getTime();
     let diff = (sleep - target) / 60000;
@@ -99,9 +105,9 @@
      用于「我通常几点睡」。按日期升序。 */
   function bedtimeTrend(nights) {
     return (nights || [])
-      .filter((n) => n.actualSleepAt)
+      .filter((n) => phoneDownAtOf(n))
       .map((n) => {
-        const d = new Date(n.actualSleepAt);
+        const d = new Date(phoneDownAtOf(n));
         const minutes = d.getHours() * 60 + d.getMinutes();
         // 早于 04:48（288 分）视为次日凌晨，跨午夜
         const crossedMidnight = minutes < 288;

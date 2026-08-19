@@ -133,6 +133,26 @@
 
       <div id="history-list" class="history-list"></div>
       <p id="history-empty" class="empty-hint">还没有记录。今晚开始。</p>
+
+      <details id="history-edit" class="history-edit" hidden>
+        <summary class="btn btn-ghost btn-small" id="history-edit-summary">编辑记录</summary>
+        <label class="field-inline">睡眠日
+          <input id="he-date" type="date" />
+        </label>
+        <label class="field-inline">放下手机
+          <input id="he-phone" type="datetime-local" />
+        </label>
+        <label class="field-inline">目标
+          <input id="he-target" type="time" value="23:30" />
+        </label>
+        <p class="content-reasons-label">原因</p>
+        <div id="he-reason-chips" class="chips chips-inline" role="group" aria-label="原因"></div>
+        <textarea id="he-message" class="textarea" rows="2" placeholder="今晚给自己的话"></textarea>
+        <div class="content-editor-actions">
+          <button id="btn-history-save" class="btn btn-ghost" type="button">保存修改</button>
+          <button id="btn-history-cancel" class="btn btn-ghost" type="button" hidden>取消</button>
+        </div>
+      </details>
     </section>
 
     <!-- ============ SETTINGS（本阶段不开发，保持骨架） ============ -->
@@ -189,6 +209,14 @@
         <button id="btn-wipe" class="btn btn-danger" type="button">清空所有数据</button>
         <button id="btn-check-update" class="btn btn-ghost" type="button">检查更新</button>
       </div>
+
+      <h2 class="section-title">数据自检</h2>
+      <p class="section-hint">扫描历史记录里的异常（日期错位 / 重复 / 陈旧 active）。只报告，不自动改动；高置信度日期错位可手动一键修正。</p>
+      <div class="settings-actions">
+        <button id="btn-data-check" class="btn btn-ghost" type="button">扫描异常</button>
+        <button id="btn-data-repair" class="btn btn-ghost" type="button" hidden>修正高置信度日期</button>
+      </div>
+      <div id="data-check-result" class="data-check-result" hidden></div>
     </section>
 
   </main>
@@ -200,6 +228,7 @@
     <button class="tab" type="button" data-view="settings">设置</button>
   </nav>
 
+  <script src="js/date-utils.js"></script>
   <script src="js/content.js"></script>
   <script src="js/db.js"></script>
   <script src="js/anchor.js"></script>

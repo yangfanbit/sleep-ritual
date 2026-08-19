@@ -25,7 +25,7 @@ const root = path.resolve(__dirname, "..");
 
 // Part A：把浏览器多 script 加载进当前上下文（IIFE 用 window 传参）
 global.window = global;
-for (const f of ["js/content.js", "js/db.js", "js/content-selector.js", "js/analytics.js"]) {
+for (const f of ["js/date-utils.js", "js/content.js", "js/db.js", "js/content-selector.js", "js/analytics.js"]) {
   vm.runInThisContext(fs.readFileSync(path.join(root, f), "utf8"), { filename: f });
 }
 
@@ -47,7 +47,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   check("sw caches content-selector.js (Phase5)", swSrc.includes('"./js/content-selector.js"'));
   check("sw caches analytics.js (Phase6)", swSrc.includes('"./js/analytics.js"'));
   check("sw caches app.js", swSrc.includes('"./js/app.js"'));
-  check("sw cache version bumped to v10", swSrc.includes('sleep-ritual-v10'));
+  check("sw caches date-utils.js (new)", swSrc.includes('"./js/date-utils.js"'));
+  check("sw cache version bumped to v11", swSrc.includes('sleep-ritual-v11'));
 
   /* ============ ContentSelector：规则评分 + 原因匹配 ============ */
   const W = ContentSelector.DEFAULT_WEIGHTS;
@@ -182,6 +183,127 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   } catch (e) { v1ok = false; }
   check("import tolerates v1 backup (no events)", v1ok);
 
+  /* ============ 本轮专项：日期工具 / completed-only / 迁移修复 / 编辑删除 / 时区 ============ */
+  const DU = (typeof DateUtils !== "undefined") ? DateUtils : (global.DateUtils || null);
+  check("DateUtils exposed to window", !!(DU && DU.sleepDate && DU.getLocalDate && DU.formatTime && DU.isValidDateStr && DU.isValidHHMM));
+
+  // 日期工具边界（与 sleepdate.test 互补，固化本轮新增的 getLocalDate / formatTime）
+  check("DateUtils.sleepDate 03:59→前一天", DU.sleepDate(new Date(2026, 7, 17, 3, 59)) === "2026-08-16");
+  check("DateUtils.sleepDate 04:00→当天", DU.sleepDate(new Date(2026, 7, 17, 4, 0)) === "2026-08-17");
+
+  // 安全格式化：任何非法输入都返回 "--:--"，绝不 NaN:NaN / Invalid Date
+  check("formatTime undefined", DU.formatTime(undefined) === "--:--");
+  check("formatTime null", DU.formatTime(null) === "--:--");
+  check("formatTime empty", DU.formatTime("") === "--:--");
+  check("formatTime invalid", DU.formatTime("not-a-date") === "--:--");
+  check("formatTime valid", /^\d{2}:\d{2}$/.test(DU.formatTime("2026-08-16T23:42:00")));
+
+  // 时区：getLocalDate 用本地时区，而非 UTC slice(0,10)
+  // 构造一个本地"今天"的时间戳，断言 getLocalDate 与本地 Date 拆解一致（反 slice 回归）
+  const now = new Date();
+  const localStr = now.getFullYear() + "-" +
+    String(now.getMonth() + 1).padStart(2, "0") + "-" +
+    String(now.getDate()).padStart(2, "0");
+  check("getLocalDate matches local Y-M-D (no UTC slice)", DU.getLocalDate(now.toISOString()) === localStr);
+  // 明确反例：一个 UTC 午夜前后、本地跨日的字符串，绝不能简单 slice
+  const tzIso = "2026-08-18T15:30:00.000Z"; // 若本地为正 8 区，本地 = 2026-08-18 23:30
+  const tzLocal = DU.getLocalDate(tzIso);
+  const tzUtc = tzIso.slice(0, 10);
+  // 仅当本地非 UTC 时二者不同；无论哪种，getLocalDate 必须等于本地拆解
+  const tzExpected = (() => {
+    const d = new Date(tzIso);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  })();
+  check("getLocalDate is local-derived (not naive UTC slice)", tzLocal === tzExpected && (tzLocal === tzUtc ? true : tzLocal !== tzUtc));
+
+  check("isValidDateStr true", DU.isValidDateStr("2026-08-16") === true);
+  check("isValidDateStr false", DU.isValidDateStr("2026-13-40") === false);
+  check("isValidHHMM true", DU.isValidHHMM("23:30") === true);
+  check("isValidHHMM false", DU.isValidHHMM("25:00") === false);
+
+  // 校验函数：独立上下文，重置后再建数据
+  await DB.wipeAll();
+  await DB.seedContentIfEmpty();
+
+  // completed-only：建一条 active + 一条 completed，仅 completed 被返回
+  await DB.addNightSession({ date: "2026-08-20", status: "active", sessionStartedAt: new Date().toISOString() });
+  await DB.addNightSession({ date: "2026-08-20", status: "completed", completedAt: new Date().toISOString(), phoneDownAt: new Date().toISOString(), bedTimeTarget: "23:30" });
+  const onlyCompleted = await DB.getCompletedNightSessions(30);
+  check("getCompletedNightSessions excludes active", onlyCompleted.length === 1 && onlyCompleted[0].status === "completed");
+
+  // 编辑：修改 sleepDate / phoneDownAt / targetTime，保持 id 不变，delayMinutes 重新计算
+  const target = onlyCompleted[0];
+  const newPhone = new Date(2026, 7, 20, 23, 50, 0).toISOString(); // 本地 23:50
+  await DB.updateNightSession(Object.assign({}, target, {
+    date: "2026-08-20",
+    phoneDownAt: newPhone,
+    actualSleepAt: newPhone,
+    bedTimeTarget: "23:00",
+    reasons: ["not_over"],
+    tonightMessage: "改过的",
+    updatedAt: new Date().toISOString(),
+    dateSource: "manual",
+  }));
+  const edited = await DB.getNightSessionById(target.id);
+  check("edit preserves NightSession.id", edited.id === target.id);
+  check("edit updates dateSource=manual", edited.dateSource === "manual");
+  // delayMinutes 重新计算：目标 23:00，放下 23:50 → 晚 50 分钟
+  const dmin = Analytics.targetDelay(edited, "23:00");
+  check("edit recomputes delay (50min late)", dmin === 50);
+
+  // 删除：只删这一条，不影响其它
+  const beforeDel = (await DB.getRecentNightSessions(30)).length;
+  await DB.deleteNightSession(target.id);
+  const afterDel = (await DB.getRecentNightSessions(30)).length;
+  check("delete removes exactly one record", afterDel === beforeDel - 1);
+
+  // 历史数据自检：date_mismatch（00:12 入睡按 cutoff 应归前一天）
+  await DB.addNightSession({
+    date: "2026-08-17",
+    status: "completed",
+    sessionStartedAt: new Date(2026, 7, 17, 0, 5, 0).toISOString(),
+    completedAt: new Date(2026, 7, 17, 0, 12, 0).toISOString(),
+    phoneDownAt: new Date(2026, 7, 17, 0, 12, 0).toISOString(), // 本地 00:12 < 4 → 应归 2026-08-16
+    bedTimeTarget: "23:30",
+  });
+  const suspicious = await DB.findSuspiciousNightSessions({ staleHours: 36 });
+  const mismatch = suspicious.find((o) => o.issues.some((i) => i.code === "date_mismatch"));
+  check("findSuspicious detects date_mismatch", !!mismatch);
+  check("date_mismatch calculatedDate = 2026-08-16", !!(mismatch && mismatch.issues.find((i) => i.code === "date_mismatch").calculatedDate === "2026-08-16"));
+
+  // 修复（用户确认后）：把记录归到正确睡眠日，标注 migration，不动其它字段
+  if (mismatch) {
+    const repaired = await DB.repairNightSessionDate(mismatch.id, "2026-08-16", "migration");
+    check("repair sets date to calculatedDate", repaired.date === "2026-08-16");
+    check("repair sets dateSource=migration", repaired.dateSource === "migration");
+    check("repair preserves completedAt", !!repaired.completedAt);
+  }
+
+  // MorningSession 一天唯一（upsert 不重复）
+  await DB.upsertMorningSessionByDate("2026-08-21", { date: "2026-08-21", mood: "good", wakeAt: new Date().toISOString() });
+  await DB.upsertMorningSessionByDate("2026-08-21", { date: "2026-08-21", mood: "ok", wakeAt: new Date().toISOString() });
+  const m21 = (await DB.getRecentMorningSessions(50)).filter((m) => m.date === "2026-08-21");
+  check("upsertMorningSessionByDate keeps one per day", m21.length === 1 && m21[0].mood === "ok");
+
+  // ContentSelector usage：incrementContentUsage 真正自增 usageCount → usagePenalty 生效
+  const content = await DB.getAllContent();
+  const c0 = content[0];
+  const before = c0.usageCount || 0;
+  await DB.incrementContentUsage(c0.id);
+  const c1 = (await DB.getAllContent()).find((c) => c.id === c0.id);
+  check("incrementContentUsage raises usageCount", (c1.usageCount || 0) === before + 1);
+
+  // ContentSelector：tagMatch 已移除（tags 是展示标签，不参与匹配）；评分只认 reasons
+  check("ContentSelector has no tagMatch weight", !("tagMatch" in ContentSelector.DEFAULT_WEIGHTS));
+  const onlyTags = { id: "Z", type: "quote", text: "z", reasons: [], tags: ["keep_scrolling"], weight: 1, usageCount: 0, enabled: true, modes: ["night"] };
+  const onlyReasons = { id: "R", type: "quote", text: "r", reasons: ["keep_scrolling"], tags: [], weight: 1, usageCount: 0, enabled: true, modes: ["night"] };
+  const sTags = ContentSelector.scoreItem(onlyTags, ["keep_scrolling"], ContentSelector.DEFAULT_WEIGHTS);
+  const sReasons = ContentSelector.scoreItem(onlyReasons, ["keep_scrolling"], ContentSelector.DEFAULT_WEIGHTS);
+  check("tags alone give no reasonMatch bonus", sTags === ContentSelector.baseWeight(onlyTags));
+  check("reasons drive the score", sReasons > sTags);
+
+  await DB.wipeAll();
+
   /* ============ jsdom 集成：深链 / 已完成 Night 保护 + Anchor source ============ */
   const SR_PORT = process.env.SR_PORT || 8795;
   async function loadApp(hash, opts = {}) {
@@ -290,6 +412,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     // Test 7：不生成新的 night_started 事件
     const startedAfter = (await w.DB.getEventsByType("night_started")).length;
     check("Test7 no new night_started event", startedAfter === startedBefore);
+
+    // History 数据层只返回 completed：completed 后该查询应有记录，且全部为 completed；
+    // 同一晚的 active（若存在）被排除。
+    const completedOnly = await w.DB.getCompletedNightSessions(30);
+    const allNights = await w.DB.getRecentNightSessions(30);
+    check("Test8 getCompletedNightSessions returns only completed",
+      completedOnly.length >= 1 && completedOnly.every((n) => n.status === "completed"));
+    check("Test9 active excluded from completed query",
+      allNights.some((n) => n.status === "active") === false || completedOnly.every((n) => n.status === "completed"));
   } catch (e) {
     check("completed-night protection integration", false);
     console.error("RE-ENTRY ERR", e && e.message);

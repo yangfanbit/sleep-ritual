@@ -11,15 +11,28 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+  // 统一的日期工具（cutoff / 本地日期 / 安全格式化均来自 DateUtils，避免重复实现）
+  const DateUtils = (typeof window !== "undefined" && window.DateUtils) || null;
+
   function nowHHMM(d = new Date()) {
     return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
   }
   function todayStr(d = new Date()) {
+    if (DateUtils && DateUtils.todayStr) return DateUtils.todayStr(d);
+    const date = d instanceof Date ? d : new Date(d);
     return (
-      d.getFullYear() + "-" +
-      String(d.getMonth() + 1).padStart(2, "0") + "-" +
-      String(d.getDate()).padStart(2, "0")
+      date.getFullYear() + "-" +
+      String(date.getMonth() + 1).padStart(2, "0") + "-" +
+      String(date.getDate()).padStart(2, "0")
     );
+  }
+  /* 安全时间格式化：对 undefined/null/""/NaN/Invalid Date 返回 fallback，永不出现 NaN:NaN。 */
+  function fmtTime(iso, fallback = "--:--") {
+    if (DateUtils && DateUtils.formatTime) return DateUtils.formatTime(iso, fallback);
+    if (iso == null || iso === "") return fallback;
+    const date = iso instanceof Date ? iso : new Date(iso);
+    if (isNaN(date.getTime())) return fallback;
+    return nowHHMM(date);
   }
   function fmtCNDate(d = new Date()) {
     const week = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
@@ -129,6 +142,10 @@
     // 只显示内容本体。source 是数据层的溯源元数据（管理者可查），
     // 不渲染到夜间页面——低刺激原则，夜间不出现任何非干预信息。
     box.textContent = item.text;
+    if (item.id) {
+      // 真实更新使用计数（usagePenalty 才可能生效）
+      DB.incrementContentUsage(item.id).catch(() => {});
+    }
     if (currentNightId && item.id) {
       DB.addEvent({
         sessionId: currentNightId,
@@ -354,12 +371,15 @@
   async function bindSleepButton() {
     $("#btn-sleep").addEventListener("click", async () => {
       const firstReason = selectedReasons.length ? selectedReasons[0] : null;
-      // 终态（已完成）后「回到流程」再次就寝：用户主动记录，新建一条 active 会话，
-      // 不激活旧的 completed 会话（保持历史事实不可变）。
-      if (!currentNightId) await createNightSession();
-      const prev = currentNightId
+      // 安全护栏：若当前会话不存在，或它已经是 completed（例如「返回流程」后再次就寝），
+      // 则新建一条 active 会话 —— 绝不覆盖已完成的睡眠事实（状态机约束）。
+      let prev = currentNightId
         ? await DB.getNightSessionById(currentNightId).catch(() => null)
         : null;
+      if (!currentNightId || (prev && prev.status === "completed")) {
+        await createNightSession();
+        prev = null;
+      }
       const sd = sleepDate();
       const nowIso = new Date().toISOString();
       const session = {
@@ -368,6 +388,7 @@
         status: "completed",
         sessionStartedAt: (prev && prev.sessionStartedAt) || nightShownAt,
         completedAt: nowIso,
+        phoneDownAt: nowIso, // 新字段（放下手机时间）；actualSleepAt 保留兼容旧数据
         actualSleepAt: nowIso,
         bedTimeTarget: await DB.getSetting("bedtime", "23:30").catch(() => "23:30"),
         contentId: shownContentId,
@@ -381,17 +402,21 @@
         sleepTownAttempted: true,
         sleepTownResult: "attempted",
         source: currentSource,
+        updatedAt: nowIso,
+        dateSource: "auto",
       };
       try {
         await DB.updateNightSession(session);
         await DB.addEvent({
           sessionId: currentNightId,
           type: "night_completed",
+          date: sd,
           payload: { date: sd },
         }).catch(() => {});
         await DB.addEvent({
           sessionId: currentNightId,
           type: "sleep_decision",
+          date: sd,
           payload: { source: currentSource },
         }).catch(() => {});
       } catch (e) {
@@ -436,14 +461,12 @@
   }
 
   /* 睡眠日：把 00:00–04:00 的入睡归入前一天。
-     这样凌晨 0:15 睡觉在统计上仍算"今晚"，第二天早上也不会被晚安页挡住。 */
-  const NIGHT_CUTOFF_HOUR = 4;
-
+     规则统一在 DateUtils.sleepDate 中定义（cutoff=4），这里直接委托，
+     避免重复实现日期规则；仅在 DateUtils 不可用时回退到本地实现。 */
   function sleepDate(d = new Date()) {
-    const date = new Date(d);
-    if (date.getHours() < NIGHT_CUTOFF_HOUR) {
-      date.setDate(date.getDate() - 1);
-    }
+    if (DateUtils && DateUtils.sleepDate) return DateUtils.sleepDate(d);
+    const date = d instanceof Date ? new Date(d) : new Date(d);
+    if (date.getHours() < 4) date.setDate(date.getDate() - 1);
     return todayStr(date);
   }
 
@@ -469,9 +492,16 @@
     return false; // completed 禁止转回 active / abandoned
   }
 
-  /* 新建一条「今晚」的 active 会话（仅创建，不复用、不覆盖已完成会话）。 */
+  /* 新建/复用一条「今晚」的 active 会话。
+     先复查本晚是否已有 active（防 race / 重复触发导致多条 active），有则复用；
+     已 completed/abandoned 的会话绝不被转回 active（状态机约束）。 */
   async function createNightSession() {
     const sd = sleepDate();
+    const existing = await DB.getActiveNightSession(sd).catch(() => null);
+    if (existing) {
+      currentNightId = existing.id;
+      return existing;
+    }
     const session = {
       date: sd,
       status: "active",
@@ -486,12 +516,16 @@
       tonightMessage: null,
       sleepTownAttempted: false,
       brainDumpUsed: false,
+      phoneDownAt: null,
+      updatedAt: new Date().toISOString(),
+      dateSource: "auto",
     };
     try {
       currentNightId = await DB.addNightSession(session);
       await DB.addEvent({
         sessionId: currentNightId,
         type: "night_started",
+        date: sd,
         payload: { date: sd, source: currentSource },
       }).catch(() => {});
     } catch (e) {
@@ -548,12 +582,15 @@
     }
   }
 
-  /* 晚安页手动返回待睡流程（兜底） */
+  /* 晚安页手动返回待睡流程（兜底）。
+     注意：必须清空 currentNightId —— 否则「返回流程」后再点睡觉会复用已 completed
+     的会话 id，从而覆盖历史事实。清空后，下一次就寝会新建一条 active 会话。 */
   function bindBackToNightFlow() {
     const btn = $("#btn-back-to-night");
     if (!btn) return;
     btn.addEventListener("click", () => {
-      // 重置当前会话状态，让用户重新走一遍睡前流程
+      // 重置当前会话状态，让用户重新走一遍睡前流程（不影响已完成的记录）
+      currentNightId = null;
       selectedReasons = [];
       brainDumpUsed = false;
       shownTonight.clear();
@@ -594,13 +631,13 @@
   }
 
   async function renderMorning() {
-    DB.addEvent({ type: "morning_opened", payload: { date: todayStr() } }).catch(() => {});
+    DB.addEvent({ type: "morning_opened", date: todayStr(), payload: { date: todayStr() } }).catch(() => {});
     const last = await DB.getLatestNightSession().catch(() => null);
+    const pd = last && (last.phoneDownAt || last.actualSleepAt);
     // 只在「最近 18 小时内」的夜间记录才算"昨晚"，避免展示几天前的旧数据
-    const fresh =
-      last && Date.now() - new Date(last.actualSleepAt).getTime() < 18 * 3600 * 1000;
+    const fresh = last && pd && Date.now() - new Date(pd).getTime() < 18 * 3600 * 1000;
     if (fresh) {
-      const d = new Date(last.actualSleepAt);
+      const d = new Date(pd);
       $("#morning-bedtime").textContent = nowHHMM(d);
       $("#morning-tonight-message").textContent =
         last.tonightMessage || "（没有记录）";
@@ -619,12 +656,15 @@
         morningMessage: $("#morning-message").value.trim() || null,
         wakeAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
       try {
-        currentMorningId = await DB.addMorningSession(session);
+        // 按「早晨日历日」upsert：同一天重复保存只更新，不新增多条 MorningSession
+        await DB.upsertMorningSessionByDate(todayStr(), session);
         await DB.addEvent({
-          sessionId: currentMorningId,
+          sessionId: null,
           type: "morning_completed",
+          date: todayStr(),
           payload: { date: todayStr() },
         }).catch(() => {});
       } catch (e) {
@@ -641,10 +681,12 @@
   /* ---------- HISTORY（骨架，本阶段不开发） ---------- */
 
   function delayMinutes(session) {
-    if (!session.bedTimeTarget || !session.actualSleepAt) return null;
+    const pd = session.phoneDownAt || session.actualSleepAt;
+    if (!session.bedTimeTarget || !pd) return null;
     const [th, tm] = session.bedTimeTarget.split(":").map(Number);
     const target = th * 60 + tm;
-    const d = new Date(session.actualSleepAt);
+    const d = new Date(pd);
+    if (isNaN(d.getTime())) return null;
     let actual = d.getHours() * 60 + d.getMinutes();
     if (actual < 360 && target >= 720) actual += 1440; // 凌晨入睡视作跨天
     const diff = actual - target;
@@ -795,14 +837,16 @@
   }
 
   async function renderHistory() {
+    // 数据源：只取 completed 的夜间记录。active / abandoned 不进入 History，
+    // 既不会显示「未完成」记录，也不会产生 NaN:NaN（完成记录必有 phoneDownAt）。
     const [nights, mornings] = await Promise.all([
-      DB.getRecentNightSessions(30).catch(() => []),
+      DB.getCompletedNightSessions(30).catch(() => []),
       DB.getRecentMorningSessions(30).catch(() => []),
     ]);
     // 时间邻近配对，避免夜/晨日期锚点不同造成配错位（显示旧内容）
     const morningByNightId = pairMorningToNight(nights, mornings);
 
-    renderHistoryTrend(nights); // 兼容既有极简趋势行（mvp 测试依赖）
+    renderHistoryTrend(nights); // 仅 completed（mvp 测试依赖趋势行）
     await renderHistorySummary(nights, mornings, historyRange);
 
     const wrap = $("#history-list");
@@ -816,7 +860,7 @@
       const div = document.createElement("div");
       div.className = "history-item";
 
-      const actual = new Date(n.actualSleepAt);
+      const pd = n.phoneDownAt || n.actualSleepAt;
       const dMin = delayMinutes(n);
       const reasonLabels = (n.reasons || [])
         .map((id) => (REASONS.find((r) => r.id === id) || {}).label)
@@ -833,8 +877,9 @@
       div.appendChild(head);
 
       const line = document.createElement("div");
+      // fmtTime 对缺失/非法时间安全返回 "--:--"，永不出现 NaN:NaN
       line.innerHTML =
-        `<span class="h-label">放下手机</span>${nowHHMM(actual)}` +
+        `<span class="h-label">放下手机</span>${fmtTime(pd)}` +
         `　<span class="h-label">目标</span>${n.bedTimeTarget || "--:--"}`;
       div.appendChild(line);
 
@@ -856,8 +901,199 @@
           `<span class="h-label">早晨</span>${moodIcon} ` + (m.morningMessage || "");
         div.appendChild(mo);
       }
+
+      // 轻量操作：编辑 / 删除
+      const actions = document.createElement("div");
+      actions.className = "h-actions";
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "h-edit";
+      editBtn.textContent = "编辑";
+      editBtn.addEventListener("click", () => startEditHistory(n));
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "h-del";
+      delBtn.textContent = "删除";
+      delBtn.addEventListener("click", () => deleteHistory(n));
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+      div.appendChild(actions);
+
       wrap.appendChild(div);
     });
+  }
+
+  /* ---------- HISTORY 编辑 / 删除（P1：安全纠正历史记录） ---------- */
+
+  let editingHistoryId = null;          // 正在编辑的 NightSession id（null = 无）
+  let selectedHistoryReasons = [];      // 编辑面板中选中的原因
+
+  function renderHistoryReasonChips() {
+    const wrap = $("#he-reason-chips");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    REASONS.forEach((r) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chip" + (selectedHistoryReasons.includes(r.id) ? " is-on" : "");
+      btn.textContent = r.label;
+      btn.addEventListener("click", () => {
+        const i = selectedHistoryReasons.indexOf(r.id);
+        if (i >= 0) selectedHistoryReasons.splice(i, 1);
+        else selectedHistoryReasons.push(r.id);
+        btn.classList.toggle("is-on");
+      });
+      wrap.appendChild(btn);
+    });
+  }
+
+  function startEditHistory(night) {
+    editingHistoryId = night.id;
+    $("#he-date").value = night.date || "";
+    $("#he-phone").value =
+      DateUtils && DateUtils.formatLocalInput
+        ? DateUtils.formatLocalInput(night.phoneDownAt || night.actualSleepAt)
+        : "";
+    $("#he-target").value = night.bedTimeTarget || "23:30";
+    $("#he-message").value = night.tonightMessage || "";
+    selectedHistoryReasons = [...(night.reasons || [])];
+    renderHistoryReasonChips();
+    $("#btn-history-save").textContent = "保存修改";
+    $("#btn-history-cancel").hidden = false;
+    const ed = $("#history-edit");
+    if (ed && !ed.open) ed.open = true;
+  }
+
+  function cancelHistoryEdit() {
+    editingHistoryId = null;
+    $("#he-date").value = "";
+    $("#he-phone").value = "";
+    $("#he-target").value = "23:30";
+    $("#he-message").value = "";
+    selectedHistoryReasons = [];
+    renderHistoryReasonChips();
+    $("#btn-history-save").textContent = "保存修改";
+    $("#btn-history-cancel").hidden = true;
+  }
+
+  async function saveHistoryEdit() {
+    if (editingHistoryId == null) return;
+    const date = $("#he-date").value;
+    const phoneInput = $("#he-phone").value;
+    const target = $("#he-target").value;
+    if (!DateUtils || !DateUtils.isValidDateStr(date)) {
+      alert("睡眠日格式不正确（应为 YYYY-MM-DD）");
+      return;
+    }
+    const phoneIso = DateUtils && DateUtils.parseLocalInput(phoneInput);
+    if (phoneInput && !phoneIso) {
+      alert("放下手机时间格式不正确");
+      return;
+    }
+    if (!DateUtils || !DateUtils.isValidHHMM(target)) {
+      alert("目标时间格式不正确（应为 HH:MM）");
+      return;
+    }
+    const orig = await DB.getNightSessionById(editingHistoryId).catch(() => null);
+    if (!orig) {
+      alert("记录不存在，可能已被删除。");
+      cancelHistoryEdit();
+      await renderHistory();
+      return;
+    }
+    const updated = Object.assign({}, orig, {
+      date, // 修改睡眠日不改变 id，Morning 配对基于时间戳（不依赖 date 字符串），不会断裂
+      phoneDownAt: phoneIso || orig.phoneDownAt || orig.actualSleepAt,
+      actualSleepAt: phoneIso || orig.actualSleepAt, // 兼容旧字段
+      bedTimeTarget: target,
+      reasons: [...selectedHistoryReasons],
+      tonightMessage: $("#he-message").value.trim() || null,
+      updatedAt: new Date().toISOString(),
+      dateSource: "manual",
+    });
+    try {
+      await DB.updateNightSession(updated);
+    } catch (e) {
+      console.error("保存历史记录失败", e);
+    }
+    cancelHistoryEdit();
+    await renderHistory();
+  }
+
+  async function deleteHistory(night) {
+    if (!confirm("确定删除这条记录？该操作不可恢复，且只删除这一条。")) return;
+    try {
+      await DB.deleteNightSession(night.id);
+    } catch (e) {
+      console.error("删除历史记录失败", e);
+    }
+    await renderHistory();
+  }
+
+  function bindHistoryEdit() {
+    const save = $("#btn-history-save");
+    const cancel = $("#btn-history-cancel");
+    if (save) save.addEventListener("click", saveHistoryEdit);
+    if (cancel) cancel.addEventListener("click", cancelHistoryEdit);
+  }
+
+  /* ---------- 数据自检（P2：异常检测，人工确认后才修正） ---------- */
+
+  async function bindDataCheck() {
+    const checkBtn = $("#btn-data-check");
+    const repairBtn = $("#btn-data-repair");
+    const result = $("#data-check-result");
+    if (!checkBtn || !result) return;
+
+    let lastReport = []; // 最近一次扫描结果（供修正使用）
+
+    checkBtn.addEventListener("click", async () => {
+      const report = await DB.findSuspiciousNightSessions({ staleHours: 36 }).catch(() => []);
+      lastReport = report;
+      if (!report.length) {
+        result.hidden = false;
+        result.innerHTML = `<p class="data-ok">未发现异常记录。</p>`;
+        if (repairBtn) repairBtn.hidden = true;
+        return;
+      }
+      const mismatch = report.filter((o) =>
+        o.issues.some((i) => i.code === "date_mismatch")
+      );
+      const lines = report
+        .map((o) => {
+          const issues = o.issues
+            .map((i) => {
+              const extra = i.calculatedDate ? `（应归 ${i.calculatedDate}）` : "";
+              return `· ${i.code}${extra}：${i.detail}`;
+            })
+            .join("<br>");
+          return `<div class="data-row"><div class="data-id">记录 #${o.id} · ${o.date} · ${o.status}</div><div class="data-issues">${issues}</div></div>`;
+        })
+        .join("");
+      result.hidden = false;
+      result.innerHTML = `<p class="data-warn">发现 ${report.length} 条疑点：</p>${lines}`;
+      if (repairBtn) repairBtn.hidden = mismatch.length === 0;
+    });
+
+    if (repairBtn) {
+      repairBtn.addEventListener("click", async () => {
+        const mismatch = lastReport.filter((o) =>
+          o.issues.some((i) => i.code === "date_mismatch")
+        );
+        if (!mismatch.length) return;
+        if (!confirm(`将修正 ${mismatch.length} 条高置信度的日期错位（按放下手机时间重新归日），并标记为 migration。是否继续？`))
+          return;
+        for (const o of mismatch) {
+          const issue = o.issues.find((i) => i.code === "date_mismatch");
+          if (issue && issue.calculatedDate) {
+            await DB.repairNightSessionDate(o.id, issue.calculatedDate, "migration").catch(() => {});
+          }
+        }
+        // 修正后刷新扫描结果与 History
+        checkBtn.click();
+        await renderHistory().catch(() => {});
+      });
+    }
   }
 
   /* ---------- SETTINGS（骨架，本阶段不开发） ---------- */
@@ -1176,6 +1412,8 @@
     bindMorningSave();
     bindSettings();
     bindHistoryRange();
+    bindHistoryEdit();
+    bindDataCheck();
     registerSW();
 
     // 入口来源：集中到 AnchorProvider（平台判断不再散落各处）

@@ -83,6 +83,36 @@ function reqToPromise(req) {
   });
 }
 
+function pad2(n) {
+  return n < 10 ? "0" + n : "" + n;
+}
+
+/* 本地日期（YYYY-MM-DD）：优先用 DateUtils（统一时区语义），否则本地 Date 兜底。
+   绝不使用 iso.slice(0,10)（那是 UTC，跨时区错位）。 */
+function localDateOf(ts) {
+  const du = (typeof window !== "undefined" && window.DateUtils) || null;
+  if (du && typeof du.getLocalDate === "function") {
+    const d = du.getLocalDate(ts);
+    if (d) return d;
+  }
+  const date = ts instanceof Date ? ts : new Date(ts);
+  if (isNaN(date.getTime())) return null;
+  return date.getFullYear() + "-" + pad2(date.getMonth() + 1) + "-" + pad2(date.getDate());
+}
+
+/* NightSession 稳定排序：日期降序 → 完成时间降序 → 开始时间降序 → id 降序。
+   保证 getLatestNightSession 在「同日多记录」时取最新的那条。 */
+function cmpNightSession(a, b) {
+  if (a.date !== b.date) return b.date.localeCompare(a.date);
+  const ca = a.completedAt ? new Date(a.completedAt).getTime() : -Infinity;
+  const cb = b.completedAt ? new Date(b.completedAt).getTime() : -Infinity;
+  if (ca !== cb) return cb - ca;
+  const sa = a.sessionStartedAt ? new Date(a.sessionStartedAt).getTime() : -Infinity;
+  const sb = b.sessionStartedAt ? new Date(b.sessionStartedAt).getTime() : -Infinity;
+  if (sa !== sb) return sb - sa;
+  return (b.id || 0) - (a.id || 0);
+}
+
 const DB = {
   _db: null,
   async ready() {
@@ -126,6 +156,19 @@ const DB = {
     return tx(db, "content", "readwrite", (s) =>
       s.put({ ...item, updatedAt: new Date().toISOString() })
     );
+  },
+
+  /* 内容被展示后真实更新使用计数（让 ContentSelector 的 usagePenalty 真正生效）。 */
+  async incrementContentUsage(id) {
+    const all = await this.getAllContent();
+    const item = all.find((c) => c.id === id);
+    if (!item) return;
+    const updated = Object.assign({}, item, {
+      usageCount: (item.usageCount || 0) + 1,
+      lastShownAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return this.updateContent(updated);
   },
 
   async deleteContent(id) {
@@ -200,7 +243,20 @@ const DB = {
     const all = await reqToPromise(
       db.transaction("nightSessions", "readonly").objectStore("nightSessions").getAll()
     );
-    return all.sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
+    return all.sort(cmpNightSession).slice(0, limit);
+  },
+
+  /* 只返回已完成（completed）的夜间记录 —— History / Analytics 的唯一数据源。
+     active / abandoned 一律不进入 History，避免未完成记录污染统计与显示 NaN。 */
+  async getCompletedNightSessions(limit = 30) {
+    const all = await this.getRecentNightSessions(100000);
+    return all.filter((n) => n.status === "completed").slice(0, limit);
+  },
+
+  /* 删除单条夜间记录（History 删除用）。不影响其它记录。 */
+  async deleteNightSession(id) {
+    const db = await this.ready();
+    return tx(db, "nightSessions", "readwrite", (s) => s.delete(id));
   },
 
   async getLatestNightSession() {
@@ -223,6 +279,24 @@ const DB = {
     return all.sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
   },
 
+  /* 按「早晨日历日」upsert：同一天只保留一条 canonical MorningSession。
+     已存在 → 保留原 id 合并更新；不存在 → 新增。避免重复保存产生多条。 */
+  async upsertMorningSessionByDate(date, session) {
+    const db = await this.ready();
+    const all = await reqToPromise(
+      db.transaction("morningSessions", "readonly").objectStore("morningSessions").getAll()
+    );
+    const existing = all.find((m) => m.date === date);
+    if (existing) {
+      const merged = Object.assign({}, existing, session, {
+        id: existing.id,
+        updatedAt: new Date().toISOString(),
+      });
+      return tx(db, "morningSessions", "readwrite", (s) => s.put(merged));
+    }
+    return tx(db, "morningSessions", "readwrite", (s) => s.add(session));
+  },
+
   /* ---------- events（append-only 行为日志） ---------- */
 
   /* event: { sessionId?, date?, type, timestamp?, payload? }
@@ -235,7 +309,7 @@ const DB = {
     const ts = event.timestamp != null ? event.timestamp : new Date().toISOString();
     const ev = {
       sessionId: event.sessionId != null ? event.sessionId : null,
-      date: event.date != null ? event.date : ts.slice(0, 10),
+      date: event.date != null ? event.date : localDateOf(ts),
       type: event.type,
       timestamp: ts,
       payload: event.payload != null ? event.payload : null,
@@ -263,6 +337,95 @@ const DB = {
   async getEventsByType(type, limit = 100000) {
     const all = await this.getRecentEvents(limit);
     return all.filter((e) => e.type === type);
+  },
+
+  /* ---------- 历史数据自检 / 修复（P0：安全迁移，绝不静默覆盖） ---------- */
+
+  /* 计算某时间戳按 cutoff 应归属的睡眠日（与 sleepDate 同规则，但不依赖全局 DateUtils 也可用）。 */
+  sleepDateFor(ts, cutoff = 4) {
+    const du = (typeof window !== "undefined" && window.DateUtils) || null;
+    if (du && typeof du.sleepDate === "function") return du.sleepDate(new Date(ts));
+    const d = new Date(ts);
+    if (d.getHours() < cutoff) d.setDate(d.getDate() - 1);
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  },
+
+  /* 扫描全部 NightSession，返回结构化疑点（供 Settings 人工确认 / 修复）。
+     不修改任何数据。返回 [{ id, date, status, issues:[{code,detail,calculatedDate?}] }]。
+     检测：
+       stale_active         active 且超过 staleHours（默认 36h）未结束
+       date_mismatch        completed/active 有 phoneDownAt，但按 cutoff 归日 ≠ n.date
+       duplicate_completed  同一 sleepDate 多条 completed
+       missing_times        completed 但缺 phoneDownAt/actualSleepAt
+       unparseable_time     phoneDownAt 无法解析 */
+  async findSuspiciousNightSessions(opts = {}) {
+    const staleHours = opts.staleHours != null ? opts.staleHours : 36;
+    const staleMs = staleHours * 3600 * 1000;
+    const all = await this.getRecentNightSessions(100000);
+    const completedByDate = {};
+    const out = [];
+    for (const n of all) {
+      const issues = [];
+      const pd = n.phoneDownAt || n.actualSleepAt;
+
+      if (n.status === "active" && n.sessionStartedAt) {
+        const started = new Date(n.sessionStartedAt).getTime();
+        if (!isNaN(started) && Date.now() - started > staleMs) {
+          issues.push({
+            code: "stale_active",
+            detail: "active 会话超过 " + staleHours + " 小时未结束",
+          });
+        }
+      }
+      if ((n.status === "completed" || n.status === "active") && pd) {
+        if (isNaN(new Date(pd).getTime())) {
+          issues.push({ code: "unparseable_time", detail: "放下手机时间无法解析" });
+        } else {
+          const calc = this.sleepDateFor(pd);
+          if (calc && calc !== n.date) {
+            issues.push({
+              code: "date_mismatch",
+              detail: "按放下手机时间应归入 " + calc + "，但记录为 " + n.date,
+              calculatedDate: calc,
+            });
+          }
+        }
+      }
+      if (n.status === "completed") {
+        completedByDate[n.date] = (completedByDate[n.date] || 0) + 1;
+        if (!(n.phoneDownAt || n.actualSleepAt)) {
+          issues.push({ code: "missing_times", detail: "completed 但缺少放下手机时间" });
+        }
+      }
+      if (issues.length) out.push({ id: n.id, date: n.date, status: n.status, issues });
+    }
+    Object.keys(completedByDate).forEach((d) => {
+      if (completedByDate[d] > 1) {
+        out
+          .filter((o) => o.date === d && o.status === "completed")
+          .forEach((o) =>
+            o.issues.push({
+              code: "duplicate_completed",
+              detail: "同一睡眠日 " + d + " 存在多条 completed",
+            })
+          );
+      }
+    });
+    return out;
+  },
+
+  /* 用户确认后的单条日期修复：把记录归到正确睡眠日，并标注 dateSource=migration。
+     只改 date / dateSource / updatedAt，不动其它完成数据。 */
+  async repairNightSessionDate(id, newDate, dateSource = "migration") {
+    const n = await this.getNightSessionById(id);
+    if (!n) return null;
+    const updated = Object.assign({}, n, {
+      date: newDate,
+      dateSource: dateSource,
+      updatedAt: new Date().toISOString(),
+    });
+    await this.updateNightSession(updated);
+    return updated;
   },
 
   /* ---------- 导出 / 导入 / 清空 ---------- */

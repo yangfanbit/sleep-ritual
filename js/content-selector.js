@@ -17,9 +17,8 @@
   "use strict";
 
   const DEFAULT_WEIGHTS = {
-    reasonMatch: 3, // 每个命中原因
-    tagMatch: 1, // 每个命中标签
-    usagePenalty: 0.15, // 每单位 usageCount
+    reasonMatch: 3, // 每个命中原因（reasons 字段 = 真实匹配键）
+    usagePenalty: 0.15, // 每单位 usageCount（展示后真实自增）
     noise: 1.5, // 探索噪声幅度
   };
 
@@ -29,15 +28,15 @@
     return 0;
   }
 
+  /* 评分：原因命中（item.reasons 与 reasonIds 相交）+ 基础权重 - 使用降权 + 噪声。
+     注意：tags 在本项目数据契约中是「给人看的主题标签，不参与机器匹配」，
+     因此不纳入评分（tagMatch 已移除，避免假装有效）。 */
   function scoreItem(item, reasonIds, weights) {
     let score = 0;
     const reasons = item.reasons || [];
-    const tags = item.tags || [];
     if (reasonIds && reasonIds.length) {
       const rm = reasons.filter((r) => reasonIds.includes(r)).length;
       score += rm * weights.reasonMatch;
-      const tm = tags.filter((t) => reasonIds.includes(t)).length;
-      score += tm * weights.tagMatch;
     }
     score += baseWeight(item);
     score -= (item.usageCount || 0) * weights.usagePenalty;
