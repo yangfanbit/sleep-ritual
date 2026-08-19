@@ -1,8 +1,11 @@
 /* Sleep Ritual — Service Worker
    策略：App Shell 预缓存（cache-first），其余请求网络优先并回退缓存。
-   保证离线可打开、首页秒开。 */
+   保证离线可打开、首页秒开。
 
-const CACHE = "sleep-ritual-v11";
+   版本协同：每次修改 JS 资源必须同步 bump CACHE（v11→v12…），
+   否则真机会继续使用旧缓存导致「GitHub 已更新但手机没变化」。 */
+
+const CACHE = "sleep-ritual-v12";
 const SHELL = [
   "./",
   "./index.html",
@@ -32,10 +35,6 @@ self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
 });
 
-self.addEventListener("message", (e) => {
-  if (e.data === "SKIP_WAITING") self.skipWaiting();
-});
-
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches
@@ -44,7 +43,23 @@ self.addEventListener("activate", (e) => {
         Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
       )
       .then(() => self.clients.claim())
+      .then(() =>
+        // 向所有受控页面广播当前 SW cache 版本，供设置页「版本诊断」显示
+        self.clients.matchAll({ includeUncontrolled: true }).then((cls) =>
+          cls.forEach((c) =>
+            c.postMessage({ type: "SW_CACHE_VERSION", version: CACHE })
+          )
+        )
+      )
   );
+});
+
+// 新 SW 安装后也主动报告一次版本（页面可据此提示「新版本已就绪」）
+self.addEventListener("message", (e) => {
+  if (e.data === "SKIP_WAITING") self.skipWaiting();
+  if (e.data === "GET_CACHE_VERSION" && e.source) {
+    e.source.postMessage({ type: "SW_CACHE_VERSION", version: CACHE });
+  }
 });
 
 self.addEventListener("fetch", (e) => {

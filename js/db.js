@@ -15,6 +15,13 @@
 const DB_NAME = "sleep-ritual";
 const DB_VERSION = 2;
 
+/* 旧数据迁移版本标记。
+   每次扩展迁移逻辑时 +1；已打过标记的 NightSession 不再重复处理（幂等）。
+   v1：为缺少 status 的旧 NightSession（b77ae1b 之前的版本创建）补齐
+       status=completed / phoneDownAt / sessionStartedAt / completedAt / dateSource，
+       并保留原始 date / id / 时间戳，绝不重新推导日期。 */
+const LEGACY_MIGRATION_VERSION = 1;
+
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -368,6 +375,15 @@ const DB = {
       const issues = [];
       const pd = n.phoneDownAt || n.actualSleepAt;
 
+      // 旧数据安全检查：缺少 status 字段（应已被启动迁移补齐）。
+      // 正常情况下迁移会自动修复，此处作为兜底，确保不会静默漏掉旧记录。
+      if (n.status == null) {
+        issues.push({
+          code: "legacy_missing_status",
+          detail: "旧数据缺少 status 字段（应已被启动迁移修复；若仍出现请重新打开应用）",
+        });
+      }
+
       if (n.status === "active" && n.sessionStartedAt) {
         const started = new Date(n.sessionStartedAt).getTime();
         if (!isNaN(started) && Date.now() - started > staleMs) {
@@ -426,6 +442,109 @@ const DB = {
     });
     await this.updateNightSession(updated);
     return updated;
+  },
+
+  /* 旧数据迁移（P0：数据安全优先，绝不静默覆盖 / 清空 / 重建）。
+     背景：b77ae1b 之前的版本创建的 NightSession 只有 actualSleepAt / date 等字段，
+     没有 status。新版本 History 只显示 status==="completed"，导致旧记录"消失"。
+     本函数一次性补齐缺失字段，把旧记录安全地纳入 History。
+
+     原则（严格遵守）：
+       1. 只补缺失字段，绝不覆盖已有值（if (x == null) 才写）。
+       2. 状态推断：有 actualSleepAt/completedAt → completed；否则标记 legacy 待人工确认。
+       3. 保留原始 date / id / 时间戳，不重新推导睡眠日（避免再次日期错位）。
+       4. 幂等：已打 legacyMigrationVersion 标记的记录跳过，多次运行结果一致、不重复。
+       5. 数量守恒：迁移前后 nightSessions 总数必须相等，否则中止并报错，绝不删除。
+
+     返回报告：{ before, after, recovered, completed, active, needsReview, modified, ok, error? } */
+  async migrateLegacyNightSessions() {
+    const all = await this.getRecentNightSessions(100000);
+    const before = all.length;
+    let recovered = 0, completed = 0, active = 0, needsReview = 0, modified = 0;
+    const writes = [];
+
+    for (const n of all) {
+      // 已迁移过的记录：跳过写入（统计仍计入最终状态）
+      const alreadyMigrated = n.legacyMigrationVersion === LEGACY_MIGRATION_VERSION;
+      const updated = Object.assign({}, n);
+      let changed = false;
+
+      // 1) 推断 status（核心：补齐后旧记录才会进入 completed-only History）
+      if (n.status == null) {
+        const hasCompletion = !!(n.actualSleepAt || n.completedAt);
+        updated.status = hasCompletion ? "completed" : "legacy";
+        changed = true;
+      }
+
+      // 2) 补 phoneDownAt（History / Analytics 依赖 pd = phoneDownAt || actualSleepAt）
+      if (updated.phoneDownAt == null) {
+        const pd = updated.actualSleepAt || updated.completedAt;
+        if (pd) { updated.phoneDownAt = pd; changed = true; }
+      }
+      // 反向兜底：仅有 completedAt 没有 actualSleepAt 时也补齐，保证两字段一致
+      if (updated.actualSleepAt == null && updated.completedAt) {
+        updated.actualSleepAt = updated.completedAt; changed = true;
+      }
+      // 3) 补 sessionStartedAt（cmpNightSession 排序依赖）
+      if (updated.sessionStartedAt == null) {
+        const s = updated.shownAt || updated.actualSleepAt || updated.completedAt;
+        if (s) { updated.sessionStartedAt = s; changed = true; }
+      }
+      // 4) 补 completedAt
+      if (updated.completedAt == null && updated.actualSleepAt) {
+        updated.completedAt = updated.actualSleepAt; changed = true;
+      }
+      // 5) 标注迁移来源（绝不重新推导 date —— 保留原始睡眠日）
+      if (updated.dateSource == null) {
+        updated.dateSource = "legacy"; changed = true;
+      }
+
+      // 统计最终状态（只计一次）
+      if (updated.status === "completed") {
+        completed++;
+        if (n.status == null && (n.actualSleepAt || n.completedAt)) recovered++;
+      } else if (updated.status === "active") {
+        active++;
+      } else {
+        needsReview++;
+      }
+
+      if (changed && !alreadyMigrated) {
+        updated.legacyMigrationVersion = LEGACY_MIGRATION_VERSION;
+        updated.migratedAt = new Date().toISOString();
+        writes.push(updated);
+      }
+    }
+
+    for (const u of writes) {
+      await this.updateNightSession(u);
+      modified++;
+    }
+
+    // 数量守恒校验：迁移绝不能导致记录变多/变少
+    const after = (await this.getRecentNightSessions(100000)).length;
+    if (before !== after) {
+      const error =
+        `迁移数量异常：迁移前 ${before} 条，迁移后 ${after} 条，已停止并保留原数据。`;
+      console.error("[migration] " + error);
+      const bad = { before, after, recovered, completed, active, needsReview, modified, ok: false, error };
+      await this.setSetting("lastLegacyMigrationReport", bad).catch(() => {});
+      return bad;
+    }
+
+    const report = { before, after, recovered, completed, active, needsReview, modified, ok: true };
+    await this.setSetting("lastLegacyMigrationReport", report).catch(() => {});
+    return report;
+  },
+
+  /* 版本诊断信息（供设置页展示：App / SW / DB 版本对照） */
+  async getDiagnostics() {
+    return {
+      dbName: DB_NAME,
+      dbVersion: DB_VERSION,
+      schemaVersion: 2,
+      legacyMigrationVersion: LEGACY_MIGRATION_VERSION,
+    };
   },
 
   /* ---------- 导出 / 导入 / 清空 ---------- */

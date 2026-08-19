@@ -211,12 +211,16 @@
       </div>
 
       <h2 class="section-title">数据自检</h2>
-      <p class="section-hint">扫描历史记录里的异常（日期错位 / 重复 / 陈旧 active）。只报告，不自动改动；高置信度日期错位可手动一键修正。</p>
+      <p class="section-hint">扫描历史记录里的异常（日期错位 / 重复 / 陈旧 active / 旧数据缺 status）。只报告，不自动改动；高置信度日期错位可手动一键修正。</p>
       <div class="settings-actions">
         <button id="btn-data-check" class="btn btn-ghost" type="button">扫描异常</button>
         <button id="btn-data-repair" class="btn btn-ghost" type="button" hidden>修正高置信度日期</button>
       </div>
       <div id="data-check-result" class="data-check-result" hidden></div>
+
+      <h2 class="section-title">版本诊断</h2>
+      <p class="section-hint">如果「GitHub 已更新但手机看起来没变化」，对照这里判断：SW Cache 是否更新、DB 是否迁移成功。</p>
+      <div id="version-diagnostics" class="version-diagnostics" aria-live="polite"></div>
     </section>
 
   </main>

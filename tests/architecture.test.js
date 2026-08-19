@@ -48,7 +48,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   check("sw caches analytics.js (Phase6)", swSrc.includes('"./js/analytics.js"'));
   check("sw caches app.js", swSrc.includes('"./js/app.js"'));
   check("sw caches date-utils.js (new)", swSrc.includes('"./js/date-utils.js"'));
-  check("sw cache version bumped to v11", swSrc.includes('sleep-ritual-v11'));
+  check("sw cache version bumped to v12", swSrc.includes('sleep-ritual-v12'));
 
   /* ============ ContentSelector：规则评分 + 原因匹配 ============ */
   const W = ContentSelector.DEFAULT_WEIGHTS;

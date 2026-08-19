@@ -961,7 +961,14 @@
     $("#btn-history-save").textContent = "保存修改";
     $("#btn-history-cancel").hidden = false;
     const ed = $("#history-edit");
-    if (ed && !ed.open) ed.open = true;
+    // Bug 2 修复：必须同时移除 hidden 并展开，否则用户点击编辑看不到任何反应。
+    // （<details hidden> 仅设 open=true 仍不可见；hidden 优先级高于 open。）
+    if (ed) {
+      ed.hidden = false;
+      if (!ed.open) ed.open = true;
+      // 滚动到编辑区，保证移动端小屏也能看到表单
+      try { ed.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (_) {}
+    }
   }
 
   function cancelHistoryEdit() {
@@ -974,6 +981,9 @@
     renderHistoryReasonChips();
     $("#btn-history-save").textContent = "保存修改";
     $("#btn-history-cancel").hidden = true;
+    // 取消后折叠编辑区（但保留 hidden=false 以便下次直接展开，避免再次出现「点了没反应」）
+    const ed = $("#history-edit");
+    if (ed) ed.open = false;
   }
 
   async function saveHistoryEdit() {
@@ -1048,11 +1058,22 @@
     let lastReport = []; // 最近一次扫描结果（供修正使用）
 
     checkBtn.addEventListener("click", async () => {
-      const report = await DB.findSuspiciousNightSessions({ staleHours: 36 }).catch(() => []);
+      // Bug 3 修复：点击必须有即时反馈，避免「点了没反应」错觉
+      result.hidden = false;
+      result.innerHTML = `<p class="data-loading">正在扫描历史数据…</p>`;
+      if (repairBtn) repairBtn.hidden = true;
+      let report;
+      try {
+        report = await DB.findSuspiciousNightSessions({ staleHours: 36 });
+      } catch (e) {
+        console.error("数据自检失败", e);
+        result.innerHTML = `<p class="data-error">扫描失败：${(e && e.message) || e}。请重试。</p>`;
+        return;
+      }
       lastReport = report;
       if (!report.length) {
         result.hidden = false;
-        result.innerHTML = `<p class="data-ok">未发现异常记录。</p>`;
+        result.innerHTML = `<p class="data-ok">✓ 检查完成，未发现异常记录。</p>`;
         if (repairBtn) repairBtn.hidden = true;
         return;
       }
@@ -1094,6 +1115,42 @@
         await renderHistory().catch(() => {});
       });
     }
+  }
+
+  /* ---------- 版本诊断（排查「GitHub 已更新但手机没变化」） ----------
+     在设置页显示 App / SW Cache / DB 版本，便于真机快速判断
+     到底是代码问题、Service Worker 缓存问题、还是 IndexedDB 迁移问题。 */
+  const APP_VERSION = "1.5.0";
+  let swCacheVersion = null;
+
+  function renderVersionDiagnostics() {
+    const el = $("#version-diagnostics");
+    if (!el) return;
+    const dbDiag = (DB && DB.getDiagnostics) ? "（DB 层就绪）" : "";
+    Promise.resolve(DB && DB.getDiagnostics ? DB.getDiagnostics() : null)
+      .then((dbd) => {
+        el.innerHTML =
+          `<div class="diag-row"><span class="diag-k">App Version</span><span class="diag-v">${APP_VERSION}</span></div>` +
+          `<div class="diag-row"><span class="diag-k">SW Cache</span><span class="diag-v">${swCacheVersion != null ? swCacheVersion : "未注册"}</span></div>` +
+          `<div class="diag-row"><span class="diag-k">DB Name</span><span class="diag-v">${(dbd && dbd.dbName) || "—"}</span></div>` +
+          `<div class="diag-row"><span class="diag-k">DB Version</span><span class="diag-v">${(dbd && dbd.dbVersion) || "—"}</span></div>` +
+          `<div class="diag-row"><span class="diag-k">Legacy Migration</span><span class="diag-v">${(dbd && dbd.legacyMigrationVersion) || "—"}</span></div>`;
+      })
+      .catch(() => {
+        el.innerHTML = `<div class="diag-row"><span class="diag-k">App Version</span><span class="diag-v">${APP_VERSION}</span></div>` +
+          `<div class="diag-row"><span class="diag-k">SW Cache</span><span class="diag-v">${swCacheVersion != null ? swCacheVersion : "未注册"}</span></div>` +
+          `<div class="diag-row"><span class="diag-k">DB</span><span class="diag-v">读取失败 ${dbDiag}</span></div>`;
+      });
+  }
+
+  // 接收 Service Worker 报告的当前 cache 版本号
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      if (e && e.data && e.data.type === "SW_CACHE_VERSION") {
+        swCacheVersion = e.data.version;
+        renderVersionDiagnostics();
+      }
+    });
   }
 
   /* ---------- SETTINGS（骨架，本阶段不开发） ---------- */
@@ -1384,6 +1441,12 @@
         if (reg.installing) track(reg.installing);
         reg.addEventListener("updatefound", () => track(reg.installing));
         window.__checkForUpdate = () => reg.update();
+        // 主动询问当前 SW 的 cache 版本，用于设置页版本诊断
+        try {
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage("GET_CACHE_VERSION");
+          }
+        } catch (_) {}
       })
       .catch((e) => console.warn("SW 注册失败", e));
   }
@@ -1394,6 +1457,18 @@
     try {
       await DB.ready();
       await DB.seedContentIfEmpty();
+      // P0：启动时安全迁移旧数据（补 status 等），保留原 id / date / 时间戳，
+      // 幂等且数量守恒校验；失败时记录但不阻断应用启动。
+      try {
+        const report = await DB.migrateLegacyNightSessions();
+        if (report && report.modified) {
+          console.info("[migration] 旧数据迁移完成", report);
+        } else if (report) {
+          console.info("[migration] 无需迁移 / 已迁移过", report);
+        }
+      } catch (me) {
+        console.error("[migration] 旧数据迁移异常（应用继续启动）", me);
+      }
       await DB.addEvent({ type: "app_opened", payload: { ts: Date.now() } }).catch(() => {});
     } catch (e) {
       console.error("IndexedDB 初始化失败，应用将以无存储模式运行", e);
@@ -1414,6 +1489,7 @@
     bindHistoryRange();
     bindHistoryEdit();
     bindDataCheck();
+    renderVersionDiagnostics();
     registerSW();
 
     // 入口来源：集中到 AnchorProvider（平台判断不再散落各处）
