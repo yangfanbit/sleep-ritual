@@ -46,9 +46,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   check("sw caches anchor.js (Phase4)", swSrc.includes('"./js/anchor.js"'));
   check("sw caches content-selector.js (Phase5)", swSrc.includes('"./js/content-selector.js"'));
   check("sw caches analytics.js (Phase6)", swSrc.includes('"./js/analytics.js"'));
+  check("sw caches behavior-profile.js (Phase4)", swSrc.includes('"./js/behavior-profile.js"'));
   check("sw caches app.js", swSrc.includes('"./js/app.js"'));
   check("sw caches date-utils.js (new)", swSrc.includes('"./js/date-utils.js"'));
-  check("sw cache version bumped to v13", swSrc.includes('sleep-ritual-v13'));
+  check("sw cache version bumped to v14", swSrc.includes('sleep-ritual-v14'));
 
   /* ============ ContentSelector：规则评分 + 原因匹配 ============ */
   const W = ContentSelector.DEFAULT_WEIGHTS;

@@ -152,12 +152,21 @@
 
   let shownTonight = new Set(); // 本次会话已展示过的内容 id（避免同晚内重复）
 
-  function showContentItem(box, item) {
+  function showContentItem(box, item, profile) {
     shownContentId = item.id ?? null;
     if (item.id) shownTonight.add(item.id);
     // 只显示内容本体。source 是数据层的溯源元数据（管理者可查），
     // 不渲染到夜间页面——低刺激原则，夜间不出现任何非干预信息。
     box.textContent = item.text;
+    // 个体化提示：仅当本地历史显示该内容与你较好结果「经常同时出现」时，
+    // 自然地融入一句「今晚可能更适合这个」，不做成 AI 报告风格。
+    // 数据不足（shown<3）或信号不强（<0.65）时不显示，保持中性。
+    const hint = $("#night-content-hint");
+    if (hint) {
+      const sig = profile && item.id && profile[item.id] ? profile[item.id].personalSignal : 0.5;
+      const shown = profile && item.id && profile[item.id] ? profile[item.id].shownCount : 0;
+      hint.hidden = !(sig >= 0.65 && shown >= 3);
+    }
     if (item.id) {
       // 真实更新使用计数（usagePenalty 才可能生效）
       DB.incrementContentUsage(item.id).catch(() => {});
@@ -181,14 +190,15 @@
     }
   }
 
-  /* 从内容池中按规则选取一条：委托 ContentSelector（规则评分版本）。
+  /* 从内容池中按规则选取一条：委托 ContentSelector（第四阶段起自适应版本）。
      1. enabled 为 true（默认 true）且 modes 含 "night"
-     2. 原因命中 / 标签命中 / 基础权重 / 使用降权 / 探索噪声 加权
+     2. 原因命中 / 基础权重 / 使用降权 / 个人历史效果 / 最近使用降权 / 探索噪声
      3. 排除 excludeIds（本次会话 + 近 7 晚已展示），池空回退不过滤
-     见 js/content-selector.js。 */
-  function pickContent(all, reasonIds, excludeIds = null) {
+     profile/recentUsage 由调用方基于本地历史计算后注入（local-first）。
+     见 js/content-selector.js + js/behavior-profile.js。 */
+  function pickContent(all, reasonIds, excludeIds = null, profile = null, recentUsage = null) {
     if (window.ContentSelector) {
-      return window.ContentSelector.selectForNight({ all, reasonIds, excludeIds });
+      return window.ContentSelector.selectForNight({ all, reasonIds, excludeIds, profile, recentUsage });
     }
     return null;
   }
@@ -209,6 +219,28 @@
     return ids;
   }
 
+  /* 构建本地个体化上下文（profile + recentUsage），注入 ContentSelector。
+     local-first：只在本地 IndexedDB 上聚合，绝不上传。
+     数据不足时 profile 信号为中性 0.5，不影响推荐——绝不凭小样本过度个性化。 */
+  async function buildPersonalContext() {
+    const BP = window.BehaviorProfile;
+    if (!BP) return { profile: null, recentUsage: null };
+    try {
+      const [nights, mornings] = await Promise.all([
+        DB.getCompletedNightSessions(30).catch(() => []),
+        DB.getRecentMorningSessions(30).catch(() => []),
+      ]);
+      const pairMap = pairMorningToNight(nights, mornings);
+      const all = await DB.getAllContent().catch(() => []);
+      return {
+        profile: BP.buildContentProfile(all, nights, pairMap),
+        recentUsage: BP.recentUsage(nights, 7),
+      };
+    } catch (e) {
+      return { profile: null, recentUsage: null };
+    }
+  }
+
   async function renderNightContent() {
     const box = $("#night-content");
     try {
@@ -218,8 +250,9 @@
         return;
       }
       const exclude = await recentlyShownIds();
-      const item = pickContent(all, null, exclude);
-      if (item) showContentItem(box, item);
+      const ctx = await buildPersonalContext();
+      const item = pickContent(all, null, exclude, ctx.profile, ctx.recentUsage);
+      if (item) showContentItem(box, item, ctx.profile);
       else box.textContent = "今晚，就到此为止吧。";
     } catch (e) {
       box.textContent = "今晚，就到此为止吧。";
@@ -233,8 +266,9 @@
       const all = await DB.getAllContent();
       if (!all.length) return;
       const exclude = await recentlyShownIds();
-      const item = pickContent(all, selectedReasons, exclude);
-      if (item) showContentItem(box, item);
+      const ctx = await buildPersonalContext();
+      const item = pickContent(all, selectedReasons, exclude, ctx.profile, ctx.recentUsage);
+      if (item) showContentItem(box, item, ctx.profile);
     } catch (e) {
       /* 静默失败，保留上一条内容 */
     }
@@ -249,12 +283,13 @@
       const all = await DB.getAllContent();
       if (!all.length) return;
       const exclude = await recentlyShownIds();
-      let item = pickContent(all, selectedReasons, exclude);
-      if (!item) item = pickContent(all, selectedReasons, null); // 池子转空，回退不过滤
+      const ctx = await buildPersonalContext();
+      let item = pickContent(all, selectedReasons, exclude, ctx.profile, ctx.recentUsage);
+      if (!item) item = pickContent(all, selectedReasons, null, ctx.profile, ctx.recentUsage); // 池子转空，回退不过滤
       if (!item) return;
       box.style.opacity = "0";
       setTimeout(() => {
-        showContentItem(box, item); // 计入 shownTonight，最终落库为这晚展示句
+        showContentItem(box, item, ctx.profile); // 计入 shownTonight，最终落库为这晚展示句
         requestAnimationFrame(() => { box.style.opacity = "1"; });
         delete box.dataset.shuffling;
       }, 160);
@@ -1048,18 +1083,32 @@
       el.appendChild(trendBlock("睡得更早了吗？", body));
     }
 
-    // 2) 最常见的熬夜原因（Top 3）
-    const top = Analytics.topReasons(nights, 3);
-    if (top.length) {
-      const reasonLabel = (id) => (REASONS.find((r) => r.id === id) || {}).label || id;
-      const ol = document.createElement("ol");
-      ol.className = "trend-list";
-      top.forEach((r, i) => {
-        const li = document.createElement("li");
-        li.textContent = `${reasonLabel(r.id)}（${r.count} 晚）`;
-        ol.appendChild(li);
-      });
-      el.appendChild(trendBlock("最常见的熬夜原因", ol));
+    // 1b) 熬夜模式（统计，非诊断）：仅当样本充足且首因占比≥40% 才下结论
+    const BP = window.BehaviorProfile;
+    if (BP) {
+      const pat = BP.stayUpPattern(nights, 30);
+      if (pat.top.length) {
+        const reasonLabel = (id) => (REASONS.find((r) => r.id === id) || {}).label || id;
+        const ol = document.createElement("ol");
+        ol.className = "trend-list";
+        pat.top.slice(0, 3).forEach((r) => {
+          const li = document.createElement("li");
+          li.textContent = `${reasonLabel(r.id)}（${Math.round(r.pct * 100)}%，${r.count} 晚）`;
+          ol.appendChild(li);
+        });
+        let extra = "";
+        // 结论门槛：≥14 样本 且 首因占比≥40%——只用观察性措辞，不做心理诊断
+        if (pat.dominant) {
+          extra = `你最近的熬夜大多出现在「${reasonLabel(pat.dominant.id)}」的场景。`;
+        }
+        el.appendChild(trendBlock("熬夜模式", ol, { muted: !pat.dominant }));
+        if (extra) {
+          const note = document.createElement("p");
+          note.className = "trend-body";
+          note.textContent = extra;
+          el.lastChild.querySelector(".trend-body").appendChild(note);
+        }
+      }
     }
 
     // 3) 最近最常用的方法

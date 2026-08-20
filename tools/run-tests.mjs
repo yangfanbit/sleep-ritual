@@ -32,6 +32,7 @@ const UNIT = [
   "tests/regression.test.js",
   "tests/trends.test.js",
   "tests/duplicate.test.js",
+  "tests/personalize.test.js",
   "tests/legacy-migration.test.js",
   "tests/sw-cache.test.js",
 ];

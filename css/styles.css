@@ -721,6 +721,12 @@ input[type="time"], .input, .select {
 .dup-meta p { margin: 0; }
 .dup-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
 
+/* 夜间个体化提示（极克制，仅高信号时出现） */
+.night-content-hint {
+  font-size: 0.72rem; color: var(--text-night-dim);
+  margin-top: 0.35rem; text-align: center;
+}
+
 /* 尊重系统减弱动效设置 */
 @media (prefers-reduced-motion: reduce) {
   *, .view.is-active { animation: none !important; transition: none !important; }

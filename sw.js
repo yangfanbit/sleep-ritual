@@ -5,7 +5,7 @@
    版本协同：每次修改 JS 资源必须同步 bump CACHE（v11→v12…），
    否则真机会继续使用旧缓存导致「GitHub 已更新但手机没变化」。 */
 
-const CACHE = "sleep-ritual-v13";
+const CACHE = "sleep-ritual-v14";
 const SHELL = [
   "./",
   "./index.html",
@@ -20,6 +20,7 @@ const SHELL = [
   "./js/anchor.js",
   "./js/content-selector.js",
   "./js/analytics.js",
+  "./js/behavior-profile.js",
   "./js/app.js",
   "./data/seed-content.json",
   "./data/seed-actions.json",
