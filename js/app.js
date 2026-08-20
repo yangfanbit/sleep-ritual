@@ -34,6 +34,21 @@
     if (isNaN(date.getTime())) return fallback;
     return nowHHMM(date);
   }
+
+  /* 统一 HTML 转义：所有需要拼进 innerHTML 的动态值都必须先过这里。
+     用户输入（morningMessage / tonightMessage / 错误 message 等）一律按纯文本处理，
+     杜绝 <script>/<img onerror> 等注入。静态文案无需转义。 */
+  function escapeHTML(s) {
+    if (s == null) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+  // 测试钩子：暴露统一转义函数（对生产逻辑无副作用）
+  if (typeof window !== "undefined") window.escapeHTML = escapeHTML;
   function fmtCNDate(d = new Date()) {
     const week = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
     return `${d.getMonth() + 1}月${d.getDate()}日 周${week}`;
@@ -649,7 +664,9 @@
   }
 
   function bindMorningSave() {
-    $("#btn-morning-save").addEventListener("click", async () => {
+    const btn = $("#btn-morning-save");
+    const errEl = $("#morning-save-error");
+    btn.addEventListener("click", async () => {
       const session = {
         date: todayStr(),
         mood: selectedMood,
@@ -658,6 +675,8 @@
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+      btn.disabled = true;
+      if (errEl) errEl.hidden = true;
       try {
         // 按「早晨日历日」upsert：同一天重复保存只更新，不新增多条 MorningSession
         await DB.upsertMorningSessionByDate(todayStr(), session);
@@ -667,14 +686,22 @@
           date: todayStr(),
           payload: { date: todayStr() },
         }).catch(() => {});
+        // 成功：清空输入并进入终态
+        $("#morning-message").value = "";
+        $$(".mood").forEach((b) => b.classList.remove("is-on"));
+        selectedMood = null;
+        showMorningDone();
       } catch (e) {
-        console.error("保存失败", e);
+        // 失败：保留用户输入，明确告知，保留按钮以供重试——绝不静默谎报成功
+        console.error("早晨记录保存失败", e);
+        if (errEl) {
+          errEl.hidden = false;
+          errEl.textContent =
+            "这次记录没有保存成功，请检查后重新点「保存，开始今天」重试。你的输入已保留。";
+        }
+      } finally {
+        btn.disabled = false;
       }
-      // 无论存储是否成功，都进入终态——不让技术问题打断早晨
-      $("#morning-message").value = "";
-      $$(".mood").forEach((b) => b.classList.remove("is-on"));
-      selectedMood = null;
-      showMorningDone();
     });
   }
 
@@ -688,7 +715,10 @@
     const d = new Date(pd);
     if (isNaN(d.getTime())) return null;
     let actual = d.getHours() * 60 + d.getMinutes();
-    if (actual < 360 && target >= 720) actual += 1440; // 凌晨入睡视作跨天
+    // 跨午夜修正：入睡时刻早于统一睡眠日 cutoff（04:00）视作跨到次日，+1440。
+    // 使用 DateUtils 的 cutoff（240 分），不再写隐含的 360（06:00）。
+    const cutoffMin = (DateUtils && DateUtils.SLEEP_CUTOFF_MINUTES) || 240;
+    if (actual < cutoffMin && target >= 720) actual += 1440;
     const diff = actual - target;
     return diff > 0 ? diff : 0;
   }
@@ -896,9 +926,18 @@
       const m = morningByNightId[n.id];
       if (m && (m.morningMessage || m.mood)) {
         const mo = document.createElement("div");
+        const label = document.createElement("span");
+        label.className = "h-label";
+        label.textContent = "早晨";
+        mo.appendChild(label);
         const moodIcon = { good: "🙂", ok: "😐", sleepy: "😴" }[m.mood] || "";
-        mo.innerHTML =
-          `<span class="h-label">早晨</span>${moodIcon} ` + (m.morningMessage || "");
+        if (moodIcon) mo.appendChild(document.createTextNode(" " + moodIcon + " "));
+        // 用户输入的 morningMessage 必须按纯文本插入，禁用 innerHTML 防 XSS
+        if (m.morningMessage) {
+          const msg = document.createElement("span");
+          msg.textContent = m.morningMessage;
+          mo.appendChild(msg);
+        }
         div.appendChild(mo);
       }
 
@@ -1067,7 +1106,9 @@
         report = await DB.findSuspiciousNightSessions({ staleHours: 36 });
       } catch (e) {
         console.error("数据自检失败", e);
-        result.innerHTML = `<p class="data-error">扫描失败：${(e && e.message) || e}。请重试。</p>`;
+        result.hidden = false;
+        // 错误 message 可能含任意文本，必须转义后插入
+        result.innerHTML = `<p class="data-error">扫描失败：${escapeHTML((e && e.message) || e)}。请重试。</p>`;
         return;
       }
       lastReport = report;
@@ -1084,11 +1125,11 @@
         .map((o) => {
           const issues = o.issues
             .map((i) => {
-              const extra = i.calculatedDate ? `（应归 ${i.calculatedDate}）` : "";
-              return `· ${i.code}${extra}：${i.detail}`;
+              const extra = i.calculatedDate ? `（应归 ${escapeHTML(i.calculatedDate)}）` : "";
+              return `· ${escapeHTML(i.code)}${extra}：${escapeHTML(i.detail)}`;
             })
             .join("<br>");
-          return `<div class="data-row"><div class="data-id">记录 #${o.id} · ${o.date} · ${o.status}</div><div class="data-issues">${issues}</div></div>`;
+          return `<div class="data-row"><div class="data-id">记录 #${escapeHTML(o.id)} · ${escapeHTML(o.date)} · ${escapeHTML(o.status)}</div><div class="data-issues">${issues}</div></div>`;
         })
         .join("");
       result.hidden = false;
@@ -1370,18 +1411,132 @@
       URL.revokeObjectURL(a.href);
     });
 
+    /* 恢复（Restore）：用备份文件整体覆盖当前数据。
+       流程：解析 → validateBackup → 显示「当前 vs 备份」预览 → 用户确认 → restoreAll
+             → 成功/失败反馈。非法格式 / 校验失败一律拒绝并保留当前数据。 */
+    const restorePreview = $("#restore-preview");
+
     $("#file-import").addEventListener("change", async (e) => {
       const file = e.target.files[0];
+      e.target.value = ""; // 允许重复选择同一文件
       if (!file) return;
+
+      let data;
       try {
-        const data = JSON.parse(await file.text());
-        await DB.importAll(data);
-        await renderSettings();
-        alert("导入完成。");
+        data = JSON.parse(await file.text());
       } catch (err) {
-        alert("导入失败：" + err.message);
+        if (restorePreview) {
+          restorePreview.hidden = false;
+          restorePreview.textContent = "无法解析该文件：不是合法的 JSON。恢复已取消，当前数据未改动。";
+        }
+        return;
       }
-      e.target.value = "";
+
+      const validation = DB.validateBackup(data);
+      if (!validation.ok) {
+        if (restorePreview) {
+          restorePreview.hidden = false;
+          // 校验错误来自系统，但统一用 textContent 渲染，杜绝任何注入
+          restorePreview.textContent =
+            "备份文件校验未通过：" + validation.errors.join("；") + "。恢复已取消，当前数据未改动。";
+        }
+        return;
+      }
+
+      // 显示恢复预览：当前 vs 备份 数量对比，必须用户确认才覆盖
+      const current = await DB.exportAll().catch(() => null);
+      const cur = current
+        ? {
+            night: current.nightSessions.length,
+            morning: current.morningSessions.length,
+            events: current.events.length,
+            content: current.content.length,
+            settings: current.settings.length,
+          }
+        : { night: 0, morning: 0, events: 0, content: 0, settings: 0 };
+      const bak = validation.summary;
+
+      if (restorePreview) {
+        restorePreview.hidden = false;
+        restorePreview.innerHTML = "";
+        const wrap = document.createElement("div");
+
+        const title = document.createElement("p");
+        title.className = "restore-title";
+        title.textContent = "恢复预览（恢复将以备份数据整体覆盖当前数据）：";
+        wrap.appendChild(title);
+
+        const tbl = document.createElement("div");
+        tbl.className = "restore-table";
+        const addRow = (label, a, b) => {
+          const r = document.createElement("div");
+          r.className = "restore-row";
+          const l = document.createElement("span"); l.textContent = label;
+          const va = document.createElement("span"); va.textContent = String(a);
+          const vb = document.createElement("span"); vb.textContent = String(b);
+          r.appendChild(l); r.appendChild(va); r.appendChild(vb);
+          tbl.appendChild(r);
+        };
+        addRow("数据集合", "当前", "备份");
+        addRow("Night", cur.night, bak.night);
+        addRow("Morning", cur.morning, bak.morning);
+        addRow("Events", cur.events, bak.events);
+        addRow("Content", cur.content, bak.content);
+        addRow("Settings", cur.settings, bak.settings);
+        wrap.appendChild(tbl);
+
+        const note = document.createElement("p");
+        note.className = "restore-note";
+        note.textContent =
+          "恢复后将以备份数据为准，当前数据会被覆盖（恢复前已自动备份，可再恢复回去）。";
+        wrap.appendChild(note);
+
+        const actions = document.createElement("div");
+        actions.className = "restore-actions";
+        const confirmBtn = document.createElement("button");
+        confirmBtn.type = "button";
+        confirmBtn.className = "btn btn-danger";
+        confirmBtn.textContent = "确认恢复";
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "btn btn-ghost";
+        cancelBtn.textContent = "取消";
+        actions.appendChild(confirmBtn);
+        actions.appendChild(cancelBtn);
+        wrap.appendChild(actions);
+        restorePreview.appendChild(wrap);
+
+        const cleanup = () => {
+          restorePreview.hidden = true;
+          restorePreview.innerHTML = "";
+        };
+        cancelBtn.addEventListener("click", cleanup);
+
+        confirmBtn.addEventListener("click", async () => {
+          confirmBtn.disabled = true;
+          cancelBtn.disabled = true;
+          const status = document.createElement("p");
+          status.className = "restore-status";
+          status.textContent = "正在恢复…";
+          actions.appendChild(status);
+          try {
+            const res = await DB.restoreAll(data);
+            status.className = "restore-status ok";
+            status.textContent =
+              `恢复完成：Night ${res.summary.night} · Morning ${res.summary.morning} · ` +
+              `Events ${res.summary.events}。`;
+            await renderSettings().catch(() => {});
+            await renderHistory().catch(() => {});
+          } catch (err) {
+            status.className = "restore-status err";
+            status.textContent =
+              "恢复失败：" + ((err && err.message) || err) + "。当前数据未改动。";
+          } finally {
+            confirmBtn.disabled = false;
+            cancelBtn.disabled = false;
+          }
+        });
+      }
     });
 
     $("#btn-wipe").addEventListener("click", async () => {

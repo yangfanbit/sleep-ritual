@@ -104,13 +104,17 @@
   /* 就寝时间趋势：每天实际放下手机的时刻（分钟，0–1440）及是否跨午夜。
      用于「我通常几点睡」。按日期升序。 */
   function bedtimeTrend(nights) {
+    // 统一睡眠日 cutoff：与 DateUtils.NIGHT_CUTOFF_HOUR (04:00=240 分) 一致，
+    // 不再使用其它隐含的分钟阈值。
+    const cutoffMin =
+      (global && global.DateUtils && global.DateUtils.SLEEP_CUTOFF_MINUTES) || 240;
     return (nights || [])
       .filter((n) => phoneDownAtOf(n))
       .map((n) => {
         const d = new Date(phoneDownAtOf(n));
         const minutes = d.getHours() * 60 + d.getMinutes();
-        // 早于 04:48（288 分）视为次日凌晨，跨午夜
-        const crossedMidnight = minutes < 288;
+        // 早于 cutoff（04:00）视为次日凌晨，跨午夜
+        const crossedMidnight = minutes < cutoffMin;
         return { date: n.date, minutes, crossedMidnight };
       })
       .sort((a, b) => a.date.localeCompare(b.date));

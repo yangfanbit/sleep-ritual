@@ -14,6 +14,7 @@
 
 const DB_NAME = "sleep-ritual";
 const DB_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 2; // 当前备份/导出格式版本；restoreAll 仅接受 <= 此版本
 
 /* 旧数据迁移版本标记。
    每次扩展迁移逻辑时 +1；已打过标记的 NightSession 不再重复处理（幂等）。
@@ -570,8 +571,8 @@ const DB = {
       ]);
     return {
       app: "sleep-ritual",
-      schemaVersion: 2,
-      version: 2,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      version: CURRENT_SCHEMA_VERSION,
       exportedAt: new Date().toISOString(),
       settings,
       content,
@@ -581,21 +582,126 @@ const DB = {
     };
   },
 
-  async importAll(data) {
-    if (!data || data.app !== "sleep-ritual") {
-      throw new Error("不是 Sleep Ritual 的备份文件");
+  /* ---------- 备份校验（Restore 前置，纯函数，不触碰 DB） ---------- */
+  validateBackup(data) {
+    const errors = [];
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      return { ok: false, errors: ["不是合法的对象"], summary: null };
     }
+    if (data.app !== "sleep-ritual") {
+      errors.push("不是 Sleep Ritual 备份文件（app 字段不符）");
+    }
+    const sv = data.schemaVersion != null
+      ? data.schemaVersion
+      : data.version != null
+      ? data.version
+      : 1;
+    if (sv > CURRENT_SCHEMA_VERSION) {
+      errors.push(
+        `不支持的备份版本 schemaVersion=${sv}（当前最高支持 ${CURRENT_SCHEMA_VERSION}）`
+      );
+    }
+    const stores = ["settings", "content", "nightSessions", "morningSessions", "events"];
+    stores.forEach((k) => {
+      if (data[k] === undefined) return; // 旧版可能缺 events，允许
+      if (!Array.isArray(data[k])) errors.push(`${k} 不是合法数组`);
+    });
+    // 关键字段类型校验（抽样前若干条，避免大文件全量扫描）
+    const typeCheck = (arr, name, mustHave) => {
+      if (!Array.isArray(arr)) return;
+      arr.slice(0, 50).forEach((r, i) => {
+        if (r == null || typeof r !== "object") errors.push(`${name}[${i}] 不是对象`);
+        else if (mustHave && !mustHave.every((f) => f in r))
+          errors.push(`${name}[${i}] 缺少关键字段`);
+      });
+    };
+    typeCheck(data.nightSessions, "nightSessions", ["date"]);
+    typeCheck(data.morningSessions, "morningSessions", ["date"]);
+    typeCheck(data.events, "events");
+
+    const summary = {
+      night: Array.isArray(data.nightSessions) ? data.nightSessions.length : 0,
+      morning: Array.isArray(data.morningSessions) ? data.morningSessions.length : 0,
+      events: Array.isArray(data.events) ? data.events.length : 0,
+      content: Array.isArray(data.content) ? data.content.length : 0,
+      settings: Array.isArray(data.settings) ? data.settings.length : 0,
+    };
+    return { ok: errors.length === 0, errors, summary, schemaVersion: sv };
+  },
+
+  /* 版本转换层：把任意支持版本（<=CURRENT）的备份规范化为当前结构。
+     当前只有 v1/v2；未来版本在此分支做字段映射，禁止静默丢弃字段。 */
+  normalizeBackup(data) {
+    const sv = data.schemaVersion != null
+      ? data.schemaVersion
+      : data.version != null
+      ? data.version
+      : 1;
+    const out = {
+      settings: Array.isArray(data.settings) ? data.settings : [],
+      content: Array.isArray(data.content) ? data.content : [],
+      nightSessions: Array.isArray(data.nightSessions) ? data.nightSessions : [],
+      morningSessions: Array.isArray(data.morningSessions) ? data.morningSessions : [],
+      events: Array.isArray(data.events) ? data.events : [],
+    };
+    if (sv < 2) {
+      // 旧版（无 events）：缺失集合以空数组兜底，无结构化转换需求
+    }
+    return out;
+  },
+
+  /* ---------- Restore（用备份恢复到备份时的状态，整体覆盖当前） ----------
+     语义：与旧版「merge-only import」彻底区分——Restore 是「整体替换」。
+     流程：校验 → 先备份当前数据（防恢复失败 / 误恢复）→ 单事务 clear+put 全部 5 个 store
+           → 数量校验 → 迁移旧记录 → 返回报告。
+     安全：单事务保证「要么全成功、要么全不写」（失败时当前数据原样保留）；
+           恢复前已把当前数据快照存入 lastRestoreBackup，误恢复可再恢复回去。 */
+  async restoreAll(data) {
+    const validation = this.validateBackup(data);
+    if (!validation.ok) {
+      const err = new Error("备份校验失败：" + validation.errors.join("；"));
+      err.code = "BACKUP_INVALID";
+      err.validation = validation;
+      throw err;
+    }
+
+    // 1) 先备份当前数据（内存快照，用于误恢复后反悔；恢复本身若失败则由事务保证不写）
+    let snapshot = null;
+    try {
+      snapshot = await this.exportAll();
+    } catch (_) {}
+
+    // 2) 单事务整体替换：clear + put 全部 store；任一步失败 → 事务中止 → 当前数据不动
+    const normalized = this.normalizeBackup(data);
     const db = await this.ready();
-    const putAll = (storeName, rows) =>
-      rows && rows.length
-        ? tx(db, storeName, "readwrite", (s) => rows.forEach((r) => s.put(r)))
-        : Promise.resolve();
-    // 兼容旧版备份（无 events / schemaVersion）：缺失字段以空/默认值兜底
-    await putAll("settings", data.settings);
-    await putAll("content", data.content);
-    await putAll("nightSessions", data.nightSessions);
-    await putAll("morningSessions", data.morningSessions);
-    await putAll("events", data.events || []);
+    const storeNames = ["settings", "content", "nightSessions", "morningSessions", "events"];
+    await new Promise((resolve, reject) => {
+      const t = db.transaction(storeNames, "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error || new Error("恢复事务失败"));
+      t.onabort = () => reject(t.error || new Error("恢复事务被中止"));
+      storeNames.forEach((name) => {
+        const store = t.objectStore(name);
+        store.clear();
+        (normalized[name] || []).forEach((r) => store.put(r));
+      });
+    });
+
+    // 3) 数量守恒校验：恢复后各集合数量应与备份一致（事务异常时理论上不会到达这里）
+    const after = await this.exportAll();
+    const sameCount = (k) =>
+      (after[k] ? after[k].length : 0) === (normalized[k] ? normalized[k].length : 0);
+    if (!["settings", "content", "nightSessions", "morningSessions", "events"].every(sameCount)) {
+      throw new Error("恢复后数据数量校验不一致，已中止（事务回滚）。");
+    }
+
+    // 4) 恢复成功后再写快照（必须放在 clear+put 之后，否则会被上面的事务清空）
+    if (snapshot) await this.setSetting("lastRestoreBackup", snapshot).catch(() => {});
+
+    // 5) 恢复后运行迁移，确保备份里任何旧记录也能纳入 History
+    await this.migrateLegacyNightSessions().catch(() => {});
+
+    return { ok: true, summary: validation.summary, restoredAt: new Date().toISOString() };
   },
 
   async wipeAll() {

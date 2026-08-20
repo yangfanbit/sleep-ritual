@@ -85,27 +85,30 @@ const check = (name, cond) => results.push([name, !!cond]);
   const json = JSON.stringify(dump);
   check("export serializable", json.length > 100);
 
-  /* ---- 导入往返：清空 → 导入 → 校验 ---- */
+  /* ---- 恢复往返：清空 → 恢复 → 校验（Restore = 整体覆盖，非 merge） ---- */
   await DB.wipeAll();
   check("wipe empties nights", (await DB.getRecentNightSessions(30)).length === 0);
   check("wipe empties settings", (await DB.getSetting("bedtime")) === null);
   const restored = JSON.parse(json);
-  await DB.importAll(restored);
-  check("import settings", (await DB.getSetting("bedtime")) === "23:45");
-  check("import nights", (await DB.getRecentNightSessions(30)).length === 2);
-  check("import mornings", (await DB.getRecentMorningSessions(30)).length === 1);
-  check("import content", (await DB.getAllContent()).length === SEED_CONTENT.length);
+  const rs = await DB.restoreAll(restored);
+  check("restore ok", rs.ok === true);
+  check("restore settings", (await DB.getSetting("bedtime")) === "23:45");
+  check("restore nights", (await DB.getRecentNightSessions(30)).length === 2);
+  check("restore mornings", (await DB.getRecentMorningSessions(30)).length === 1);
+  check("restore content", (await DB.getAllContent()).length === SEED_CONTENT.length);
   const latestAfter = await DB.getLatestNightSession();
   check("roundtrip latest intact", latestAfter.tonightMessage === "第二晚");
 
-  /* ---- 导入校验：坏文件拒绝 ---- */
+  /* ---- 恢复校验：坏文件拒绝，且当前数据不被改动 ---- */
+  const beforeBad = (await DB.getRecentNightSessions(30)).length;
   let rejected = false;
   try {
-    await DB.importAll({ hello: "world" });
+    await DB.restoreAll({ hello: "world" });
   } catch (e) {
     rejected = true;
   }
-  check("bad import rejected", rejected);
+  check("bad restore rejected", rejected);
+  check("bad restore leaves data intact", (await DB.getRecentNightSessions(30)).length === beforeBad);
 
   /* ---- 清空后重播种 ---- */
   await DB.wipeAll();

@@ -175,13 +175,13 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   check("export schemaVersion 2", dump.schemaVersion === 2);
   await DB.wipeAll();
   check("wipe clears events", (await DB.getRecentEvents(10)).length === 0);
-  await DB.importAll(dump);
-  check("import restores events", (await DB.getEventsByType("test_evt")).length >= 1);
+  await DB.restoreAll(dump);
+  check("restore restores events", (await DB.getEventsByType("test_evt")).length >= 1);
   let v1ok = true;
   try {
-    await DB.importAll({ app: "sleep-ritual", settings: [], content: [], nightSessions: [], morningSessions: [], events: undefined });
+    await DB.restoreAll({ app: "sleep-ritual", settings: [], content: [], nightSessions: [], morningSessions: [], events: undefined });
   } catch (e) { v1ok = false; }
-  check("import tolerates v1 backup (no events)", v1ok);
+  check("restore tolerates v1 backup (no events)", v1ok);
 
   /* ============ 本轮专项：日期工具 / completed-only / 迁移修复 / 编辑删除 / 时区 ============ */
   const DU = (typeof DateUtils !== "undefined") ? DateUtils : (global.DateUtils || null);

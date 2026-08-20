@@ -109,6 +109,7 @@
         <textarea id="morning-message" class="textarea textarea-light" rows="2" placeholder="一句话就好。"></textarea>
 
         <button id="btn-morning-save" class="btn btn-primary-light" type="button">保存，开始今天</button>
+        <p id="morning-save-error" class="morning-save-error" hidden></p>
       </div>
 
       <div id="morning-done" class="morning-done" hidden>
@@ -202,13 +203,15 @@
       </details>
 
       <h2 class="section-title">数据</h2>
+      <p class="section-hint">导出用于备份。<strong>恢复</strong>会用备份文件整体覆盖当前数据（不是追加合并）。恢复前会自动备份当前数据，便于反悔。</p>
       <div class="settings-actions">
         <button id="btn-export" class="btn btn-ghost" type="button">导出 JSON</button>
-        <label class="btn btn-ghost" for="file-import">导入 JSON</label>
+        <label class="btn btn-ghost" for="file-import">恢复 JSON（覆盖）</label>
         <input id="file-import" type="file" accept="application/json" hidden />
         <button id="btn-wipe" class="btn btn-danger" type="button">清空所有数据</button>
         <button id="btn-check-update" class="btn btn-ghost" type="button">检查更新</button>
       </div>
+      <div id="restore-preview" class="restore-preview" hidden></div>
 
       <h2 class="section-title">数据自检</h2>
       <p class="section-hint">扫描历史记录里的异常（日期错位 / 重复 / 陈旧 active / 旧数据缺 status）。只报告，不自动改动；高置信度日期错位可手动一键修正。</p>

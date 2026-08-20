@@ -15,6 +15,7 @@
   "use strict";
 
   const NIGHT_CUTOFF_HOUR = 4; // 00:00–03:59 入睡算「前一天」的睡眠日
+  const SLEEP_CUTOFF_MINUTES = NIGHT_CUTOFF_HOUR * 60; // 04:00 = 240 分，统一阈值
 
   function pad2(n) {
     return n < 10 ? "0" + n : "" + n;
@@ -48,6 +49,19 @@
       date.setDate(date.getDate() - 1);
     }
     return todayStr(date);
+  }
+
+  /* 某时刻是否处于 cutoff 之后（含 cutoff 整点），即按睡眠日规则归属「当天」。
+     业务模块判断跨午夜应统一调用此函数，禁止自行写 hour < 4 / 04:48 等隐含阈值。 */
+  function isAfterSleepCutoff(d, cutoff = NIGHT_CUTOFF_HOUR) {
+    const date = d instanceof Date ? d : new Date(d);
+    if (isNaN(date.getTime())) return false;
+    return date.getHours() >= cutoff;
+  }
+
+  /* 睡眠日 key（与 sleepDate 同语义，仅别名，便于业务层语义化调用）。 */
+  function getSleepDateKey(d, cutoff = NIGHT_CUTOFF_HOUR) {
+    return sleepDate(d, cutoff);
   }
 
   /* 安全时间格式化：把 ISO 时间戳格式化为 HH:MM。
@@ -105,10 +119,13 @@
 
   const DateUtils = {
     NIGHT_CUTOFF_HOUR,
+    SLEEP_CUTOFF_MINUTES,
     pad2,
     todayStr,
     getLocalDate,
     sleepDate,
+    isAfterSleepCutoff,
+    getSleepDateKey,
     formatTime,
     formatLocalInput,
     parseLocalInput,

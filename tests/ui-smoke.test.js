@@ -9,6 +9,8 @@
  *     这同时验证了"存储失败不阻断流程"的容错设计。
  */
 const { JSDOM } = require("jsdom");
+const fake = require("fake-indexeddb");
+const { IDBKeyRange } = require("fake-indexeddb");
 
 (async () => {
   const port = process.env.SR_PORT || 8788;
@@ -16,6 +18,14 @@ const { JSDOM } = require("jsdom");
     resources: "usable",
     runScripts: "dangerously",
     pretendToBeVisual: true,
+    beforeParse(window) {
+      // 注入 fake-indexeddb，使存储真实可用（否则 Morning 保存会因无 DB 失败，
+      // 与新的「保存失败必须真实反馈」逻辑冲突）
+      window.indexedDB = fake.indexedDB;
+      window.IDBKeyRange = IDBKeyRange;
+      if (!window.URL.createObjectURL) window.URL.createObjectURL = () => "blob:x";
+      if (!window.URL.revokeObjectURL) window.URL.revokeObjectURL = () => {};
+    },
   });
   const { window } = dom;
   const $ = (s) => window.document.querySelector(s);
