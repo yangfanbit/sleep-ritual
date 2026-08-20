@@ -59,4 +59,5 @@ const ROOT = path.resolve(__dirname, "..");
   }
   console.log(`\n${pass}/${results.length} checks passed`);
   process.exitCode = pass === results.length ? 0 : 1;
+  process.exit(process.exitCode || 0); // jsdom 保持事件循环，显式退出以便 CI/runner 收尾
 })();

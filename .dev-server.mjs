@@ -1,8 +1,10 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
-import { extname, join, normalize, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, extname, join, normalize } from "node:path";
 
-const ROOT = resolve("D:/GitHub Space/sleepearly");
+// 始终以本脚本所在目录作为项目根，保证 Windows / macOS / Linux / CI 均可运行
+const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.SR_PORT) || 8793;
 const MIME = {
   ".html": "text/html; charset=utf-8",

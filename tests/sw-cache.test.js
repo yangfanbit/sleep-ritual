@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const root = "D:/GitHub Space/sleepearly";
+const root = path.resolve(__dirname, "..");
 const swSrc = fs.readFileSync(path.join(root, "sw.js"), "utf8");
 const htmlSrc = fs.readFileSync(path.join(root, "index.html"), "utf8");
 

@@ -9,14 +9,14 @@
  *   Test 5  0 异常路径：干净库扫描返回空数组
  *   Test 6  迁移后旧记录进入 completed-only History（修复 Bug 1）
  *
- * 运行：NODE_PATH=<隔离工作区>/node_modules node tests/legacy-migration.test.js
+ * 运行：npm ci 后执行 node tests/legacy-migration.test.js（或 npm test）
  */
 require("fake-indexeddb/auto");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const root = "D:/GitHub Space/sleepearly";
+const root = path.resolve(__dirname, "..");
 // db.js 的 localDateOf 依赖 window.DateUtils，故必须先加载 date-utils.js
 global.window = global; // 让 IIFE 写 window.DateUtils = ... 生效
 for (const f of ["js/date-utils.js", "js/content.js", "js/db.js"]) {

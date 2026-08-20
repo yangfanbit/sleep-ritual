@@ -493,6 +493,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log(fail ? "\n" + fail + " failed (" + results.length + " total)" : "\nall " + results.length + " checks passed");
   process.exitCode = fail ? 1 : 0;
+  process.exit(process.exitCode || 0); // jsdom 保持事件循环，显式退出以便 CI/runner 收尾
 })().catch((e) => {
   console.error("TEST ERROR", e);
   process.exitCode = 1;

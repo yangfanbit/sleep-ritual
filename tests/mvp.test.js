@@ -154,6 +154,7 @@ const ROOT = path.resolve(__dirname, "..");
     fail ? "\n" + fail + " failed" : "\nall " + results.length + " checks passed"
   );
   process.exitCode = fail ? 1 : 0;
+  process.exit(process.exitCode || 0); // jsdom 保持事件循环，显式退出以便 CI/runner 收尾
 })().catch((e) => {
   console.error("TEST ERROR", e);
   process.exitCode = 1;

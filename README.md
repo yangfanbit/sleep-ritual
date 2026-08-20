@@ -1,5 +1,7 @@
 # Sleep Ritual
 
+![CI](https://github.com/yangfanbit/sleep-ritual/actions/workflows/test.yml/badge.svg)
+
 一个跨平台（iOS / Android / 桌面浏览器）的个人睡前行为干预 PWA。
 
 不是睡眠记录 App，是"睡前行为干预器"。核心逻辑：
@@ -69,39 +71,46 @@ assets/icons/         PWA / Apple touch 图标
 docs/PRD.md           产品需求文档
 docs/DECISIONS.md     关键技术决策记录
 tests/                无头回归测试（jsdom + fake-indexeddb，不进构建）
+tools/run-tests.mjs   统一测试运行器（unit / smoke / all，自动拉起本地服务器）
+package.json          开发依赖与 npm 脚本（无运行时依赖、无构建步骤）
+.github/workflows/test.yml  CI：push / pull_request 自动跑 npm test
 ```
 
 ## 测试
 
-回归套件（共 5 套、135 项，零运行时依赖进项目）：
+依赖（`fake-indexeddb` + `jsdom`）记入 `devDependencies`，`npm ci` 后即可一键运行：
 
-| 测试 | 项数 | 说明 | 需服务器 |
+```bash
+npm test            # 全部套件（先 unit 后 smoke，自动拉起本地静态服务器）
+npm run test:unit   # 纯 Node 套件（无需服务器，最快）
+npm run test:smoke  # jsdom 集成 / 冒烟套件（自动起服务器）
+```
+
+分类说明：
+
+| 分类 | 命令 | 覆盖 |
+| --- | --- | --- |
+| Unit | `npm run test:unit` | DateUtils 边界、DB 数据层、迁移、Analytics、ContentSelector、SW 缓存静态分析、Restore 校验、长期回归门禁 |
+| Integration / Smoke | `npm run test:smoke` | 页面加载、路由（深链）、PWA 壳、核心按钮、Night→Morning 闭环、History、XSS 渲染、Morning 失败反馈 |
+
+套件明细（`npm test` 全量）：
+
+| 测试 | 项数 | 说明 | 分类 |
 | --- | --- | --- | --- |
-| `tests/db.test.js` | 30 | 数据层：种子/设置/两类 session/events 读写/导出导入往返/清空重播种/v1→v2 迁移 | 否 |
-| `tests/sleepdate.test.js` | 8 | `sleepDate()` 凌晨归前一天的日期边界 | 是（默认 8788，可 `SR_PORT` 指定） |
-| `tests/mvp.test.js` | 17 | MVP 闭环：原因→内容匹配 / session 字段完整性 / History | 是（SR_PORT） |
-| `tests/ui-smoke.test.js` | 26 | UI 冒烟：视图/按钮/容错（存储失败不阻断） | 是（SR_PORT） |
-| `tests/architecture.test.js` | 54 | 架构级：迁移/events/ContentSelector/Analytics/深链/重入/SW 壳完整 | 是（SR_PORT） |
+| `tests/db.test.js` | 32 | 数据层：种子/设置/两类 session/events 读写/导出恢复往返/清空重播种/v1→v2 迁移 | Unit |
+| `tests/date-unify.test.js` | 20 | 睡眠日 cutoff=04:00 边界 + 源码级阈值扫描 | Unit |
+| `tests/restore.test.js` | 24 | validateBackup / normalizeBackup / restoreAll（数量守恒、失败安全、v1 兼容） | Unit |
+| `tests/regression.test.js` | 8 | 长期保护门禁：migration 守恒 / 日期 / Restore=A→B / Edit 计数 / Delete / Data Health | Unit |
+| `tests/legacy-migration.test.js` | 33 | 旧数据安全迁移 + Data Check 全码检测 + 幂等 + 数量守恒 | Unit |
+| `tests/sw-cache.test.js` | 30 | SW 缓存版本 / App Shell 完整性 / 旧 cache 清理（静态分析） | Unit |
+| `tests/sleepdate.test.js` | 8 | `sleepDate()` 凌晨归前一天的日期边界（跨月/跨年） | Smoke |
+| `tests/mvp.test.js` | 17 | MVP 闭环：原因→内容匹配 / session 字段完整性 / History | Smoke |
+| `tests/xss.test.js` | 8 | 用户文本以纯文本渲染，绝不生成 `<script>`/`<img>` | Smoke |
+| `tests/morning.test.js` | 13 | 早晨保存成功 / 失败真实反馈 / 重试 / 不重复 | Smoke |
+| `tests/ui-smoke.test.js` | 26 | UI 冒烟：视图/按钮/容错/配对 | Smoke |
+| `tests/architecture.test.js` | 101 | 架构级：迁移/events/ContentSelector/Analytics/深链/重入/SW 壳/编辑删除/数据自检 | Smoke |
 
-依赖装在隔离 Node 工作区，不进入项目：
-
-```bash
-npm install jsdom fake-indexeddb
-```
-
-jsdom 类测试（ui-smoke / mvp / architecture / sleepdate）需先在项目根目录起一个静态服务器（任意端口），并用 `SR_PORT` 告知测试：
-
-```bash
-python -m http.server 8795 &   # 或 npx serve . 等，端口任意
-SR_PORT=8795 NODE_PATH=<工作区>/node_modules node tests/ui-smoke.test.js
-SR_PORT=8795 NODE_PATH=<工作区>/node_modules node tests/architecture.test.js
-```
-
-注：Windows 本机若有系统代理（如 7897），Node 经 localhost 加载页面会被截断。测试前清空代理——用 `HTTP_PROXY= HTTPS_PROXY=` 前缀（**不要**用 `env -u HTTP_PROXY`，后者会吞掉 node 的 stdout）：
-
-```bash
-HTTP_PROXY= HTTPS_PROXY= SR_PORT=8795 NODE_PATH=<工作区>/node_modules node tests/architecture.test.js
-```
+CI（`.github/workflows/test.yml`）：任何 push 到 `main` 或 pull_request 都会自动 `npm ci` + `npm test`，全绿才视为可部署。
 
 ## 数据
 

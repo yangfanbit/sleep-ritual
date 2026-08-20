@@ -1,15 +1,15 @@
 /* Sleep Ritual 数据层回归测试（fake-indexeddb + 真实 db.js/content.js）
  *
- * 运行方式（依赖装在隔离 Node 工作区，不进项目）：
- *   npm install fake-indexeddb   # 在隔离工作区
- *   NODE_PATH=<工作区>/node_modules node tests/db.test.js
+ * 运行方式：依赖记入 devDependencies，npm ci 后直接运行：
+ *   node tests/db.test.js
+ * 或统一入口：npm test
  */
 require("fake-indexeddb/auto");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const root = "D:/GitHub Space/sleepearly";
+const root = path.resolve(__dirname, "..");
 // content.js 与 db.js 以脚本方式加载到当前上下文（模拟浏览器多 script 标签）
 for (const f of ["js/content.js", "js/db.js"]) {
   vm.runInThisContext(fs.readFileSync(path.join(root, f), "utf8"), { filename: f });
