@@ -30,6 +30,8 @@ const UNIT = [
   "tests/date-unify.test.js",
   "tests/restore.test.js",
   "tests/regression.test.js",
+  "tests/trends.test.js",
+  "tests/duplicate.test.js",
   "tests/legacy-migration.test.js",
   "tests/sw-cache.test.js",
 ];

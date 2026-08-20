@@ -56,7 +56,7 @@
 
   /* ---------- 视图切换（hash 路由） ---------- */
 
-  const VIEWS = ["night", "morning", "history", "settings"];
+  const VIEWS = ["night", "morning", "history", "trends", "settings"];
   const THEME_COLORS = { night: "#000000", morning: "#f6f2e9" };
 
   function defaultViewByHour() {
@@ -86,6 +86,7 @@
     if (name === "night") await renderTonightMorningEcho();
     if (name === "morning") await renderMorning();
     if (name === "history") await renderHistory();
+    if (name === "trends") await renderTrends();
     if (name === "settings") await renderSettings();
   }
 
@@ -962,6 +963,164 @@
     });
   }
 
+  /* ---------- TRENDS（最近 30 天行为趋势，第三阶段） ----------
+     设计克制：文字优先 + 一条小型趋势线。绝不评分、不游戏化。
+     数据不足（<7 天）不强行分析；<14 天降低结论强度。 */
+  function trendBlock(title, bodyNode, opts = {}) {
+    const block = document.createElement("div");
+    block.className = "trend-block" + (opts.muted ? " is-muted" : "");
+    const t = document.createElement("div");
+    t.className = "trend-title";
+    t.textContent = title;
+    block.appendChild(t);
+    const b = document.createElement("div");
+    b.className = "trend-body";
+    if (typeof bodyNode === "string") b.textContent = bodyNode;
+    else if (bodyNode) b.appendChild(bodyNode);
+    block.appendChild(b);
+    return block;
+  }
+
+  /* 小型趋势线（SVG polyline）。values 为分钟数组（已跨午夜归一）。
+     反转 Y 轴：更早（值更小）画在更高处，直观对应「睡得更早」。 */
+  function sparkline(values, opts = {}) {
+    const w = opts.width || 120, h = opts.height || 28;
+    if (!values || values.length < 2) return "";
+    const min = Math.min.apply(null, values);
+    const max = Math.max.apply(null, values);
+    const span = max - min || 1;
+    const step = w / (values.length - 1);
+    const pts = values.map((v, i) => {
+      const x = (i * step).toFixed(1);
+      // y 反转：值越大（越晚）画越下
+      const y = (h - ((v - min) / span) * (h - 4) - 2).toFixed(1);
+      return x + "," + y;
+    }).join(" ");
+    return (
+      `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">` +
+      `<polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.5" />` +
+      `</svg>`
+    );
+  }
+
+  async function renderTrends() {
+    const el = $("#trends-list");
+    if (!el) return;
+    el.innerHTML = "";
+    const nights = await DB.getCompletedNightSessions(30).catch(() => []);
+    const readiness = Analytics.dataReadiness(nights, 30);
+
+    // 数据不足：不强行分析
+    if (readiness === "none") {
+      el.appendChild(trendBlock("",
+        "再积累几天数据，我们再看看变化。"));
+      return;
+    }
+
+    const sparseNote = readiness === "sparse"
+      ? "（数据还不多，先当个参考）"
+      : "";
+
+    // 1) 睡得更早了吗？「以前 → 现在」
+    const bn = Analytics.beforeNow(nights);
+    if (bn.firstAvg != null && bn.lastAvg != null) {
+      const dirText = bn.direction === "earlier"
+        ? `提前 ${Math.abs(bn.deltaMin)} 分钟`
+        : bn.direction === "later"
+        ? `推迟 ${bn.deltaMin} 分钟`
+        : "基本没变";
+      const body = document.createElement("div");
+      const line = document.createElement("p");
+      line.className = "trend-then-now";
+      line.textContent = `${bn.firstHHMM} → ${bn.lastHHMM}　变化：${dirText}`;
+      body.appendChild(line);
+      // 小型趋势线：按时间顺序的放下手机分钟
+      const trendPts = nights
+        .filter((n) => Analytics.phoneDownMinute(n) != null)
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+        .map((n) => Analytics.phoneDownMinute(n));
+      if (trendPts.length >= 2) {
+        const sp = document.createElement("div");
+        sp.className = "spark-wrap";
+        sp.innerHTML = sparkline(trendPts);
+        body.appendChild(sp);
+      }
+      el.appendChild(trendBlock("睡得更早了吗？", body));
+    }
+
+    // 2) 最常见的熬夜原因（Top 3）
+    const top = Analytics.topReasons(nights, 3);
+    if (top.length) {
+      const reasonLabel = (id) => (REASONS.find((r) => r.id === id) || {}).label || id;
+      const ol = document.createElement("ol");
+      ol.className = "trend-list";
+      top.forEach((r, i) => {
+        const li = document.createElement("li");
+        li.textContent = `${reasonLabel(r.id)}（${r.count} 晚）`;
+        ol.appendChild(li);
+      });
+      el.appendChild(trendBlock("最常见的熬夜原因", ol));
+    }
+
+    // 3) 最近最常用的方法
+    const bt = Analytics.behaviorTrend(nights);
+    if (bt.mostUsed) {
+      const actionLabel = (id) => {
+        const rid = Object.keys(ACTION_IDS).find((k) => ACTION_IDS[k] === id);
+        return rid ? ((REASONS.find((r) => r.id === rid) || {}).label || rid) : id;
+      };
+      let txt = `${actionLabel(bt.mostUsed.id)}（${bt.mostUsed.count} 次）`;
+      if (bt.rising) {
+        txt += `　最近在增加：${actionLabel(bt.rising.id)}（${bt.rising.before} → ${bt.rising.after}）`;
+      }
+      el.appendChild(trendBlock("最近最常用的方法", txt));
+    }
+
+    // 4) 30 天 vs 最近 7 天的节奏方向（结论强度随数据量调整）
+    const bc = Analytics.bedtimeCompare(nights);
+    if (bc.d30Avg != null) {
+      const dirText = bc.direction === "earlier"
+        ? "最近一周比整体更早"
+        : bc.direction === "later"
+        ? "最近一周比整体更晚"
+        : "最近一周和整体接近";
+      const txt = `过去 30 天平均 ${bc.d30HHMM}　最近 7 天平均 ${bc.d7HHMM}　${dirText}。${sparseNote}`;
+      el.appendChild(trendBlock("这段时间的节奏", txt, { muted: readiness === "sparse" }));
+    }
+
+    // 5) 原因 × 行为 × 次日状态（观察性关联，严格措辞）
+    const mornings = await DB.getRecentMorningSessions(30).catch(() => []);
+    const pairMap = pairMorningToNight(nights, mornings);
+    const rbm = Analytics.reasonBehaviorMood(nights, pairMap);
+    const rbTop = rbm.find((r) => r.topActionId && r.pairedMornings >= 2);
+    if (rbTop) {
+      const actionLabel = (id) => {
+        const rid = Object.keys(ACTION_IDS).find((k) => ACTION_IDS[k] === id);
+        return rid ? ((REASONS.find((r) => r.id === rid) || {}).label || rid) : id;
+      };
+      const reasonLabel = (id) => (REASONS.find((r) => r.id === id) || {}).label || id;
+      const moodWord = rbTop.goodPct != null && rbTop.goodPct >= 50
+        ? "次日状态尚可的比例较高"
+        : "次日状态一般/偏困的比例较高";
+      // 严格观察性措辞，绝不下因果结论
+      const txt =
+        `当原因里有「${reasonLabel(rbTop.reasonId)}」时，` +
+        `你较多使用「${actionLabel(rbTop.topActionId)}」。` +
+        `在你的历史记录中，出现了较高关联——${moodWord}（${rbTop.pairedMornings} 个样本）。` +
+        `这只是观察，不能说明行为导致了结果。${sparseNote}`;
+      el.appendChild(trendBlock("原因 × 行为 × 次日状态", txt, { muted: readiness === "sparse" }));
+    }
+
+    // 放下手机时间统计（平均/中位/最早/最晚）—— 纯描述
+    const ps = Analytics.phoneDownStats(nights, 30);
+    if (ps.count > 0) {
+      const txt =
+        `平均 ${Analytics.minuteToHHMM(ps.avg)}　中位 ${Analytics.minuteToHHMM(ps.median)}　` +
+        `最早 ${ps.earliestHHMM}　最晚 ${ps.latestHHMM}（共 ${ps.count} 晚）。${sparseNote}`;
+      el.appendChild(trendBlock("放下手机时间", txt, { muted: readiness === "sparse" }));
+    }
+  }
+
   /* ---------- HISTORY 编辑 / 删除（P1：安全纠正历史记录） ---------- */
 
   let editingHistoryId = null;          // 正在编辑的 NightSession id（null = 无）
@@ -1135,6 +1294,8 @@
       result.hidden = false;
       result.innerHTML = `<p class="data-warn">发现 ${report.length} 条疑点：</p>${lines}`;
       if (repairBtn) repairBtn.hidden = mismatch.length === 0;
+      // 重复记录：提供安全的解决流程（保留 A / 保留 B / 取消）
+      renderDuplicateResolution(report);
     });
 
     if (repairBtn) {
@@ -1156,6 +1317,116 @@
         await renderHistory().catch(() => {});
       });
     }
+  }
+
+  /* ---------- Duplicate History 安全解决（第三阶段 · 一） ----------
+     当 Data Health 检测到 duplicate_completed 时，按「睡眠日」分组展示
+     该日的全部记录（A / B …），每条显示 日期 / 开始(sessionStartedAt) /
+     结束(completedAt)，并提供「保留 A / 保留 B / 取消」。
+     规则：
+       · 不自动猜该保留哪条——必须用户选择；
+       · 删除前必须二次确认；
+       · 删除写 events 日志（type=duplicate_resolved，含 keptId/deletedId）可追踪；
+       · 只影响该重复日，绝不触碰其它日期；
+       · 解决后重新运行 Data Health 并刷新 History。 */
+  function renderDuplicateResolution(report) {
+    const wrap = $("#duplicate-resolution");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    // 收集所有重复睡眠日（同一 date 下多条 completed）
+    const dupByDate = {};
+    (report || []).forEach((o) => {
+      const isDup = o.issues.some((i) => i.code === "duplicate_completed");
+      if (!isDup) return;
+      (dupByDate[o.date] = dupByDate[o.date] || []).push(o.id);
+    });
+    const dates = Object.keys(dupByDate);
+    wrap.hidden = dates.length === 0;
+    if (!dates.length) return;
+
+    const head = document.createElement("p");
+    head.className = "data-warn";
+    head.textContent = `发现 ${dates.length} 个重复睡眠日，需要你选择保留哪条：`;
+    wrap.appendChild(head);
+
+    dates.forEach((date) => {
+      (async () => {
+        const records = await DB.getNightSessionsByDate(date).catch(() => []);
+        if (records.length < 2) return; // 已被解决 / 数据变化
+        const card = document.createElement("div");
+        card.className = "dup-card";
+        const title = document.createElement("div");
+        title.className = "dup-date";
+        title.textContent = `睡眠日 ${date}（${records.length} 条 completed）`;
+        card.appendChild(title);
+
+        records.forEach((n, idx) => {
+          const row = document.createElement("div");
+          row.className = "dup-row";
+          const tag = document.createElement("span");
+          tag.className = "dup-tag";
+          tag.textContent = String.fromCharCode(65 + idx); // A / B / C …
+          const meta = document.createElement("div");
+          meta.className = "dup-meta";
+          const lines = [
+            `日期：${n.date}`,
+            `开始：${fmtTime(n.sessionStartedAt)}`,
+            `结束：${fmtTime(n.completedAt)}`,
+          ];
+          lines.forEach((t) => {
+            const p = document.createElement("p");
+            p.textContent = t;
+            meta.appendChild(p);
+          });
+          row.appendChild(tag);
+          row.appendChild(meta);
+          card.appendChild(row);
+        });
+
+        const actions = document.createElement("div");
+        actions.className = "dup-actions";
+        const mkBtn = (label, keepIdx) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn btn-ghost btn-small";
+          b.textContent = label;
+          b.addEventListener("click", async () => {
+            const keep = records[keepIdx];
+            const victims = records.filter((_, i) => i !== keepIdx);
+            if (!confirm(`确定保留 ${label}、删除其余 ${victims.length} 条？该操作不可恢复，只影响 ${date}。`))
+              return;
+            for (const v of victims) {
+              try {
+                await DB.deleteNightSession(v.id);
+                await DB.addEvent({
+                  type: "duplicate_resolved",
+                  date: date,
+                  payload: { keptId: keep.id, deletedId: v.id, keptSessionStartedAt: keep.sessionStartedAt },
+                }).catch(() => {});
+              } catch (e) {
+                console.error("重复解决删除失败", e);
+              }
+            }
+            // 解决后重新扫描并刷新 History
+            $("#btn-data-check").click();
+            await renderHistory().catch(() => {});
+          });
+          return b;
+        };
+        records.forEach((_, idx) => {
+          actions.appendChild(mkBtn(`保留 ${String.fromCharCode(65 + idx)}`, idx));
+        });
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "btn btn-ghost btn-small";
+        cancel.textContent = "取消";
+        cancel.addEventListener("click", () => { card.remove(); });
+        actions.appendChild(cancel);
+        card.appendChild(actions);
+
+        wrap.appendChild(card);
+      })();
+    });
   }
 
   /* ---------- 版本诊断（排查「GitHub 已更新但手机没变化」） ----------

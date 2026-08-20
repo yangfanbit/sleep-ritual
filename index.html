@@ -156,6 +156,13 @@
       </details>
     </section>
 
+    <!-- ============ TRENDS（最近 30 天行为趋势，克制 UI） ============ -->
+    <section id="view-trends" class="view" aria-label="行为趋势">
+      <h1 class="page-title">最近 30 天</h1>
+      <p class="section-hint">只看变化，不打分。</p>
+      <div id="trends-list" class="trends-list"></div>
+    </section>
+
     <!-- ============ SETTINGS（本阶段不开发，保持骨架） ============ -->
     <section id="view-settings" class="view" aria-label="设置">
       <h1 class="page-title">设置</h1>
@@ -220,6 +227,7 @@
         <button id="btn-data-repair" class="btn btn-ghost" type="button" hidden>修正高置信度日期</button>
       </div>
       <div id="data-check-result" class="data-check-result" hidden></div>
+      <div id="duplicate-resolution" class="duplicate-resolution" hidden></div>
 
       <h2 class="section-title">版本诊断</h2>
       <p class="section-hint">如果「GitHub 已更新但手机看起来没变化」，对照这里判断：SW Cache 是否更新、DB 是否迁移成功。</p>
@@ -232,6 +240,7 @@
     <button class="tab is-active" type="button" data-view="night">今夜</button>
     <button class="tab" type="button" data-view="morning">早晨</button>
     <button class="tab" type="button" data-view="history">记录</button>
+    <button class="tab" type="button" data-view="trends">趋势</button>
     <button class="tab" type="button" data-view="settings">设置</button>
   </nav>
 

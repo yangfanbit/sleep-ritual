@@ -160,6 +160,190 @@
       .sort((a, b) => b.total - a.total);
   }
 
+  /* ======================================================================
+     第三阶段：30 天行为趋势 + 「以前 → 现在」变化（纯函数，跨午夜安全）
+     原则：只做事实描述与统计关联，不做评分、不下因果结论。
+     ====================================================================== */
+
+  /* 放下手机时刻 → 当天本地分钟（0–1440），跨午夜（早于 cutoff）归到次日 +1440。
+     缺时间返回 null。 */
+  function phoneDownMinute(night) {
+    const at = phoneDownAtOf(night);
+    if (!at) return null;
+    const d = new Date(at);
+    if (isNaN(d.getTime())) return null;
+    const cutoffMin =
+      (global && global.DateUtils && global.DateUtils.SLEEP_CUTOFF_MINUTES) || 240;
+    let m = d.getHours() * 60 + d.getMinutes();
+    if (m < cutoffMin) m += 1440; // 次日凌晨 → 接到当晚时间轴
+    return m;
+  }
+
+  /* 把「连续分钟（可能 >1440）」压回 0–1439 显示，并转 HH:MM。 */
+  function minuteToHHMM(mins) {
+    if (mins == null || isNaN(mins)) return "--:--";
+    const m = ((Math.round(mins) % 1440) + 1440) % 1440;
+    return pad2(Math.floor(m / 60)) + ":" + pad2(m % 60);
+  }
+
+  /* 方向判定阈值（分钟）：低于此视为「稳定」，避免噪声抖动。 */
+  const TREND_THRESHOLD = 5;
+
+  function trendDirection(firstAvg, lastAvg) {
+    const delta = (lastAvg || 0) - (firstAvg || 0);
+    if (delta <= -TREND_THRESHOLD) return "earlier"; // 提前
+    if (delta >= TREND_THRESHOLD) return "later";     // 推迟
+    return "stable";
+  }
+
+  /* 放下手机时间统计（最近 days 天）。
+     返回 { count, avg, median, earliest, latest, trend, earliestHHMM, latestHHMM }。
+     trend = 前半段均值 vs 后半段均值的方向（earlier/later/stable）。 */
+  function phoneDownStats(nights, days) {
+    const list = (nights || [])
+      .filter((n) => phoneDownMinute(n) != null && withinDays(n, days))
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const ms = list.map(phoneDownMinute).filter((x) => x != null);
+    if (!ms.length)
+      return { count: 0, avg: null, median: null, earliest: null, latest: null, trend: "stable", earliestHHMM: "--:--", latestHHMM: "--:--" };
+    const avg = Math.round(ms.reduce((a, b) => a + b, 0) / ms.length);
+    const median = medianMinute(ms);
+    const earliest = Math.min.apply(null, ms);
+    const latest = Math.max.apply(null, ms);
+    const half = Math.floor(list.length / 2);
+    const firstHalf = list.slice(0, half || 1);
+    const lastHalf = list.slice(half);
+    const firstAvg = firstHalf.length ? Math.round(firstHalf.map(phoneDownMinute).reduce((a, b) => a + b, 0) / firstHalf.length) : avg;
+    const lastAvg = lastHalf.length ? Math.round(lastHalf.map(phoneDownMinute).reduce((a, b) => a + b, 0) / lastHalf.length) : avg;
+    return {
+      count: ms.length,
+      avg, median, earliest, latest,
+      trend: trendDirection(firstAvg, lastAvg),
+      earliestHHMM: minuteToHHMM(earliest),
+      latestHHMM: minuteToHHMM(latest),
+    };
+  }
+
+  /* 「以前 → 现在」：最初 N 条 vs 最近 N 条的放下手机均值变化。
+     返回 { firstAvg, lastAvg, deltaMin, direction, firstHHMM, lastHHMM, sampleFirst, sampleLast }。
+     数据按 sleepDate 升序；N = min(7, 总数)。 */
+  function beforeNow(nights) {
+    const list = (nights || [])
+      .filter((n) => phoneDownMinute(n) != null)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    if (list.length < 2)
+      return { firstAvg: null, lastAvg: null, deltaMin: null, direction: "stable", firstHHMM: "--:--", lastHHMM: "--:--", sampleFirst: 0, sampleLast: 0 };
+    const chunk = Math.min(7, Math.floor(list.length / 2) || 1);
+    const firstChunk = list.slice(0, chunk);
+    const lastChunk = list.slice(-chunk);
+    const firstAvg = Math.round(firstChunk.map(phoneDownMinute).reduce((a, b) => a + b, 0) / firstChunk.length);
+    const lastAvg = Math.round(lastChunk.map(phoneDownMinute).reduce((a, b) => a + b, 0) / lastChunk.length);
+    const deltaMin = lastAvg - firstAvg;
+    return {
+      firstAvg, lastAvg, deltaMin,
+      direction: trendDirection(firstAvg, lastAvg),
+      firstHHMM: minuteToHHMM(firstAvg),
+      lastHHMM: minuteToHHMM(lastAvg),
+      sampleFirst: firstChunk.length,
+      sampleLast: lastChunk.length,
+    };
+  }
+
+  /* 就寝时间对比：30 天均值 vs 最近 7 天均值，给出方向。
+     返回 { d30Avg, d7Avg, direction, d30HHMM, d7HHMM, d30Count, d7Count }。 */
+  function bedtimeCompare(nights) {
+    const d30 = phoneDownStats(nights, 30);
+    const d7 = phoneDownStats(nights, 7);
+    return {
+      d30Avg: d30.avg, d7Avg: d7.avg,
+      direction: trendDirection(d30.avg, d7.avg),
+      d30HHMM: d30.avg != null ? minuteToHHMM(d30.avg) : "--:--",
+      d7HHMM: d7.avg != null ? minuteToHHMM(d7.avg) : "--:--",
+      d30Count: d30.count, d7Count: d7.count,
+    };
+  }
+
+  /* 高频熬夜原因 Top N（聚合 + 截断）。 */
+  function topReasons(nights, n) {
+    const agg = aggregateReasons(nights);
+    const top = typeof n === "number" ? agg.slice(0, n) : agg;
+    return top;
+  }
+
+  /* 微行为使用趋势：哪个用得最多 + 哪个最近在增加。
+     返回 { mostUsed: {id,count}|null, rising: {id, before, after}|null }。
+     rising = 把记录按时间分前后两半，after-before 增量最大且为正者。 */
+  function behaviorTrend(nights) {
+    const list = (nights || [])
+      .filter((n) => n.selectedActionId)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    if (!list.length) return { mostUsed: null, rising: null };
+    const agg = aggregateActions(list);
+    const mostUsed = agg.length ? { id: agg[0].id, count: agg[0].count } : null;
+    const half = Math.floor(list.length / 2) || 1;
+    const firstHalf = list.slice(0, half);
+    const lastHalf = list.slice(half);
+    const countIn = (arr, id) => arr.filter((x) => x.selectedActionId === id).length;
+    let rising = null;
+    agg.forEach((a) => {
+      const before = countIn(firstHalf, a.id);
+      const after = countIn(lastHalf, a.id);
+      const inc = after - before;
+      if (inc > 0 && (!rising || inc > rising.inc)) {
+        rising = { id: a.id, before, after, inc };
+      }
+    });
+    return { mostUsed, rising };
+  }
+
+  /* 原因 × 行为 × 次日状态 关联（观察性，不涉因果）。
+     对每个原因，统计与其同晚出现的微行为分布，以及配对到的次日 mood 分布。
+     pairMap: { nightId: morning }。
+     返回 [{ reasonId, sampleSize, topActionId, topActionCount, pairedMornings, goodPct, okPct }]。
+     仅供 UI 以「在你的历史记录中，出现了较高关联」式措辞呈现。 */
+  function reasonBehaviorMood(nights, pairMap) {
+    const map = {}; // reasonId -> { actions:{}, total, good, ok, sleepy, paired }
+    (nights || []).forEach((n) => {
+      (n.reasons || []).forEach((rid) => {
+        const rec = (map[rid] = map[rid] || { actions: {}, total: 0, good: 0, ok: 0, sleepy: 0, paired: 0 });
+        rec.total++;
+        if (n.selectedActionId) rec.actions[n.selectedActionId] = (rec.actions[n.selectedActionId] || 0) + 1;
+        const m = pairMap && pairMap[n.id];
+        if (m) {
+          rec.paired++;
+          if (m.mood === "good") rec.good++;
+          else if (m.mood === "ok") rec.ok++;
+          else if (m.mood === "sleepy") rec.sleepy++;
+        }
+      });
+    });
+    return Object.keys(map).map((rid) => {
+      const r = map[rid];
+      const actions = Object.keys(r.actions).map((id) => ({ id, count: r.actions[id] })).sort((a, b) => b.count - a.count);
+      const top = actions[0] || null;
+      const moodTotal = r.good + r.ok + r.sleepy;
+      return {
+        reasonId: rid,
+        sampleSize: r.total,
+        topActionId: top ? top.id : null,
+        topActionCount: top ? top.count : 0,
+        pairedMornings: r.paired,
+        goodPct: moodTotal ? Math.round((r.good / moodTotal) * 100) : null,
+        okPct: moodTotal ? Math.round((r.ok / moodTotal) * 100) : null,
+      };
+    }).sort((a, b) => b.sampleSize - a.sampleSize);
+  }
+
+  /* 数据充分性分级：返回 'none' | 'sparse' | 'partial' | 'full'。
+     <7 → none（不给趋势）；7–13 → sparse（降强度）；14–29 → partial；≥30 → full。 */
+  function dataReadiness(nights, days) {
+    const count = (nights || []).filter((n) => phoneDownMinute(n) != null && withinDays(n, days)).length;
+    if (count < 7) return "none";
+    if (count < 14) return "sparse";
+    if (count < 30) return "partial";
+    return "full";
+  }
+
   const Analytics = {
     parseDate,
     timeToDate,
@@ -173,6 +357,16 @@
     medianMinute,
     minutesToHHMM,
     behaviorEffectiveness,
+    // 第三阶段：30 天趋势 + 以前→现在 + 关联（观察性）
+    phoneDownMinute,
+    minuteToHHMM,
+    phoneDownStats,
+    beforeNow,
+    bedtimeCompare,
+    topReasons,
+    behaviorTrend,
+    reasonBehaviorMood,
+    dataReadiness,
   };
   global.Analytics = Analytics;
 })(window);

@@ -684,6 +684,43 @@ input[type="time"], .input, .select {
 }
 .tab.is-active { color: var(--text-night-main); }
 
+/* ============ TRENDS 视图（克制 UI，文字优先 + 小型趋势线） ============ */
+.trends-list { display: flex; flex-direction: column; gap: 1.4rem; }
+.trend-block {
+  padding: 0.9rem 1rem;
+  background: var(--bg-night-raise);
+  border-radius: 12px;
+}
+.trend-block.is-muted { opacity: 0.78; }
+.trend-title { font-size: 0.78rem; color: var(--text-night-dim); margin-bottom: 0.5rem; }
+.trend-body { color: var(--text-night-main); font-size: 0.95rem; line-height: 1.6; }
+.trend-then-now { font-size: 1.05rem; margin: 0 0 0.5rem; }
+.spark-wrap { color: var(--text-night-mid); margin-top: 0.4rem; }
+.spark { display: block; }
+.trend-list {
+  margin: 0; padding-left: 1.2rem; color: var(--text-night-main);
+  font-size: 0.92rem; line-height: 1.8;
+}
+
+/* ============ Duplicate History 安全解决卡片 ============ */
+.duplicate-resolution { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.8rem; }
+.dup-card {
+  padding: 0.8rem 1rem;
+  background: var(--bg-night-raise);
+  border-radius: 12px;
+  border: 1px solid #1c1c20;
+}
+.dup-date { font-size: 0.85rem; color: var(--text-night-mid); margin-bottom: 0.6rem; }
+.dup-row { display: flex; gap: 0.7rem; margin: 0.4rem 0; }
+.dup-tag {
+  flex: 0 0 auto; width: 1.4rem; height: 1.4rem; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: #1a1a1f; color: var(--text-night-main); font-size: 0.8rem;
+}
+.dup-meta { color: var(--text-night-mid); font-size: 0.85rem; line-height: 1.5; }
+.dup-meta p { margin: 0; }
+.dup-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
+
 /* 尊重系统减弱动效设置 */
 @media (prefers-reduced-motion: reduce) {
   *, .view.is-active { animation: none !important; transition: none !important; }

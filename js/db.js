@@ -246,6 +246,12 @@ const DB = {
     return all.find((n) => n.date === date && n.status === "active") || null;
   },
 
+  /* 取某睡眠日的全部夜间记录（用于 Data Health 重复解决：展示 A/B）。 */
+  async getNightSessionsByDate(date) {
+    const all = await this.getRecentNightSessions(100000);
+    return all.filter((n) => n.date === date);
+  },
+
   async getRecentNightSessions(limit = 30) {
     const db = await this.ready();
     const all = await reqToPromise(
@@ -414,7 +420,9 @@ const DB = {
           issues.push({ code: "missing_times", detail: "completed 但缺少放下手机时间" });
         }
       }
-      if (issues.length) out.push({ id: n.id, date: n.date, status: n.status, issues });
+      // 关键：先无条件入列，再由下面的重复扫描补充 duplicate_completed，
+      // 否则「干净重复记录」（仅因同日多条 completed 而异常）会被漏报。
+      out.push({ id: n.id, date: n.date, status: n.status, issues });
     }
     Object.keys(completedByDate).forEach((d) => {
       if (completedByDate[d] > 1) {
@@ -428,7 +436,8 @@ const DB = {
           );
       }
     });
-    return out;
+    // 去掉最终无任何异常的记录（上一步无条件入列的副作用）
+    return out.filter((o) => o.issues.length > 0);
   },
 
   /* 用户确认后的单条日期修复：把记录归到正确睡眠日，并标注 dateSource=migration。

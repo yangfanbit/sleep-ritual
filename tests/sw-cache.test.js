@@ -21,9 +21,9 @@ const htmlSrc = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const results = [];
 const check = (name, cond) => results.push([name, !!cond]);
 
-/* ---- cache version 已 bump 到 v12，旧 v11 不残留 ---- */
-check("CACHE 已升到 v12", /sleep-ritual-v12/.test(swSrc));
-check("旧 v11 已移除（避免误用）", !/sleep-ritual-v11\b/.test(swSrc));
+/* ---- cache version 已 bump 到 v13，旧 v12 不残留 ---- */
+check("CACHE 已升到 v13", /sleep-ritual-v13/.test(swSrc));
+check("旧 v12 已移除（避免误用）", !/sleep-ritual-v12\b/.test(swSrc));
 
 /* ---- App Shell 预缓存覆盖全部 JS 模块 ---- */
 const requiredShell = [
