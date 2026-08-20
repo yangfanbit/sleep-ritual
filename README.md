@@ -93,7 +93,7 @@ npm run test:smoke  # jsdom 集成 / 冒烟套件（自动起服务器）
 | Unit | `npm run test:unit` | DateUtils 边界、DB 数据层、迁移、Analytics、ContentSelector、SW 缓存静态分析、Restore 校验、长期回归门禁、30 天趋势、Duplicate 解决 |
 | Integration / Smoke | `npm run test:smoke` | 页面加载、路由（深链）、PWA 壳、核心按钮、Night→Morning 闭环、History、XSS 渲染、Morning 失败反馈 |
 
-全量 `npm test` 共 14 套件 / 376 项断言（Unit 203 + Smoke 173），详见下表。
+全量 `npm test` 共 15 套件 / 404 项断言（Unit 232 + Smoke 172），详见下表。
 
 套件明细（`npm test` 全量）：
 
@@ -105,6 +105,7 @@ npm run test:smoke  # jsdom 集成 / 冒烟套件（自动起服务器）
 | `tests/regression.test.js` | 8 | 长期保护门禁：migration 守恒 / 日期 / Restore=A→B / Edit 计数 / Delete / Data Health | Unit |
 | `tests/trends.test.js` | 43 | 30 天趋势：放下手机统计 / 以前→现在 / 30 vs 7 天 / 高频原因 / 微行为趋势 / 关联 / 数据充分性边界 / 空 / 跨午夜 / 异常 | Unit |
 | `tests/duplicate.test.js` | 13 | Duplicate 安全解决：检测 / 保留A删B / 只影响该日 / events 可追踪 / 重扫清零 | Unit |
+| `tests/personalize.test.js` | 26 | 个体化：reason match / 去重 / recent usage penalty / 数据不足 / 新用户 / 历史充足 / 熬夜模式阈值 | Unit |
 | `tests/legacy-migration.test.js` | 33 | 旧数据安全迁移 + Data Check 全码检测 + 幂等 + 数量守恒 | Unit |
 | `tests/sw-cache.test.js` | 30 | SW 缓存版本 / App Shell 完整性 / 旧 cache 清理（静态分析） | Unit |
 | `tests/sleepdate.test.js` | 8 | `sleepDate()` 凌晨归前一天的日期边界（跨月/跨年） | Smoke |
