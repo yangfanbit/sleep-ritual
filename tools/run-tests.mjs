@@ -35,6 +35,7 @@ const UNIT = [
   "tests/personalize.test.js",
   "tests/legacy-migration.test.js",
   "tests/sw-cache.test.js",
+  "tests/db-reliability.test.js",
 ];
 const SMOKE = [
   "tests/sleepdate.test.js",
@@ -43,6 +44,7 @@ const SMOKE = [
   "tests/morning.test.js",
   "tests/ui-smoke.test.js",
   "tests/architecture.test.js",
+  "tests/history-error.test.js",
 ];
 
 const SR_PORT = process.env.SR_PORT || "8796"; // 避开常见端口，便于并行

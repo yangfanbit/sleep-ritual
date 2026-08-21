@@ -731,3 +731,29 @@ input[type="time"], .input, .select {
 @media (prefers-reduced-motion: reduce) {
   *, .view.is-active { animation: none !important; transition: none !important; }
 }
+
+/* 数据自检：长期一致性 summary（P2 #11，非破坏性只读统计） */
+.data-summary {
+  border: 1px solid var(--line-night);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  margin-top: 0.8rem;
+  font-size: 0.85rem;
+}
+.data-summary.is-warn {
+  border-color: var(--warn, #b8863a);
+}
+.data-summary-title {
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+  color: var(--text-night-main);
+}
+.data-summary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  color: var(--text-night-mid);
+}
+.data-summary-list li {
+  padding: 0.1rem 0;
+}

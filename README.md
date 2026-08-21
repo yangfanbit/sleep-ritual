@@ -91,9 +91,9 @@ npm run test:smoke  # jsdom 集成 / 冒烟套件（自动起服务器）
 | 分类 | 命令 | 覆盖 |
 | --- | --- | --- |
 | Unit | `npm run test:unit` | DateUtils 边界、DB 数据层、迁移、Analytics、ContentSelector、SW 缓存静态分析、Restore 校验、长期回归门禁、30 天趋势、Duplicate 解决 |
-| Integration / Smoke | `npm run test:smoke` | 页面加载、路由（深链）、PWA 壳、核心按钮、Night→Morning 闭环、History、XSS 渲染、Morning 失败反馈 |
+| Integration / Smoke | `npm run test:smoke` | 页面加载、路由（深链）、PWA 壳、核心按钮、Night→Morning 闭环、History（含编辑/删除异常）、XSS 渲染、Morning 失败反馈 |
 
-全量 `npm test` 共 15 套件 / 404 项断言（Unit 232 + Smoke 172），详见下表。
+全量 `npm test` 共 17 套件 / 433 项断言（Unit 243 + Smoke 190），详见下表。
 
 套件明细（`npm test` 全量）：
 
@@ -107,13 +107,15 @@ npm run test:smoke  # jsdom 集成 / 冒烟套件（自动起服务器）
 | `tests/duplicate.test.js` | 13 | Duplicate 安全解决：检测 / 保留A删B / 只影响该日 / events 可追踪 / 重扫清零 | Unit |
 | `tests/personalize.test.js` | 26 | 个体化：reason match / 去重 / recent usage penalty / 数据不足 / 新用户 / 历史充足 / 熬夜模式阈值 | Unit |
 | `tests/legacy-migration.test.js` | 33 | 旧数据安全迁移 + Data Check 全码检测 + 幂等 + 数量守恒 | Unit |
-| `tests/sw-cache.test.js` | 30 | SW 缓存版本 / App Shell 完整性 / 旧 cache 清理（静态分析） | Unit |
+| `tests/db-reliability.test.js` | 13 | 数据可靠性：并发创建唯一 active / 迁移单事务原子性（中断不半迁移）/ 幂等可重试 | Unit |
+| `tests/sw-cache.test.js` | 31 | SW 缓存版本 / App Shell 完整性 / 旧 cache 清理（静态分析） | Unit |
 | `tests/sleepdate.test.js` | 8 | `sleepDate()` 凌晨归前一天的日期边界（跨月/跨年） | Smoke |
 | `tests/mvp.test.js` | 17 | MVP 闭环：原因→内容匹配 / session 字段完整性 / History | Smoke |
 | `tests/xss.test.js` | 8 | 用户文本以纯文本渲染，绝不生成 `<script>`/`<img>` | Smoke |
 | `tests/morning.test.js` | 13 | 早晨保存成功 / 失败真实反馈 / 重试 / 不重复 | Smoke |
 | `tests/ui-smoke.test.js` | 26 | UI 冒烟：视图/按钮/容错/配对 | Smoke |
-| `tests/architecture.test.js` | 101 | 架构级：迁移/events/ContentSelector/Analytics/深链/重入/SW 壳/编辑删除/数据自检 | Smoke |
+| `tests/architecture.test.js` | 102 | 架构级：迁移/events/ContentSelector/Analytics/深链/重入/SW 壳/编辑删除/数据自检 | Smoke |
+| `tests/history-error.test.js` | 16 | History 编辑/删除失败注入：编辑框保持/输入保留/可见错误/记录未变；删除失败保留记录；快速双击不重复；读取失败优雅降级 | Smoke |
 
 CI（`.github/workflows/test.yml`）：任何 push 到 `main` 或 pull_request 都会自动 `npm ci` + `npm test`，全绿才视为可部署。
 

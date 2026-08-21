@@ -223,6 +223,58 @@ const DB = {
 
   /* ---------- night sessions ---------- */
 
+  /* 并发保护锁（短生命周期）：同一页面内多个 async 流程同时进入
+     「检查 active → 创建」序列时，串行化整个流程，避免竞态产生两条 active。
+     只锁单次创建，不改变 DB 架构。 */
+  _activeCreateLock: null,
+
+  /* 原子地「确保某睡眠日存在 active 会话」：
+     1. 已有创建流程在跑 → 等它结束后复查，能复用就复用；
+     2. 创建前再次检查本日是否已有 active（双检）；
+     3. 创建成功后确认该日 active 数量；若异常出现多条，
+        写 events 日志（duplicate_active_suspected）供数据自检追踪，
+        绝不自动删除任何记录。
+     返回 { reused, id }；创建失败时抛出原错误，由调用方决定 UI 行为。 */
+  async addActiveNightSession(session) {
+    if (this._activeCreateLock) {
+      try { await this._activeCreateLock; } catch (_) { /* 前一个失败则自己重走检查 */ }
+      const existing = await this.getActiveNightSession(session.date).catch(() => null);
+      if (existing) return { reused: true, id: existing.id };
+    }
+    const run = (async () => {
+      const existing = await this.getActiveNightSession(session.date);
+      if (existing) return { reused: true, id: existing.id };
+      const db = await this.ready();
+      const id = await tx(db, "nightSessions", "readwrite", (s) => s.add(session));
+      // 创建后确认：同日只应有这一条 active
+      try {
+        const all = await this.getRecentNightSessions(100000);
+        const actives = all.filter(
+          (n) => n.date === session.date && n.status === "active"
+        );
+        if (actives.length > 1) {
+          console.error(
+            "[db] 检测到同日多条 active 会话（不自动删除，请用数据自检处理）",
+            actives.map((n) => n.id)
+          );
+          this.addEvent({
+            sessionId: id,
+            type: "duplicate_active_suspected",
+            date: session.date,
+            payload: { date: session.date, count: actives.length, ids: actives.map((n) => n.id) },
+          }).catch(() => {});
+        }
+      } catch (_) { /* 确认步骤失败不影响创建结果本身 */ }
+      return { reused: false, id };
+    })();
+    this._activeCreateLock = run;
+    try {
+      return await run;
+    } finally {
+      if (this._activeCreateLock === run) this._activeCreateLock = null;
+    }
+  },
+
   async addNightSession(session) {
     const db = await this.ready();
     return tx(db, "nightSessions", "readwrite", (s) => s.add(session));
@@ -440,6 +492,86 @@ const DB = {
     return out.filter((o) => o.issues.length > 0);
   },
 
+  /* ---------- 孤儿数据检测 / 长期一致性统计（只读，绝不自动修复） ---------- */
+
+  /* 孤儿检测：
+     - orphanMorning : 按「actualSleepAt ≤ wakeAt ≤ +18h」配对规则找不到任何 NightSession
+       的 MorningSession（与 app.js pairMorningToNight 同一语义；wakeAt 缺失/无法解析
+       也视为孤儿——宁可多报不漏报）
+     - orphanEvent   : sessionId 指向不存在的 NightSession 的 Event
+       （sessionId 为 null 的事件不算孤儿，如 app_opened / morning_completed） */
+  async findOrphanRecords() {
+    const [nights, mornings, events] = await Promise.all([
+      this.getRecentNightSessions(100000),
+      this.getRecentMorningSessions(100000),
+      (async () => {
+        const db = await this.ready();
+        return reqToPromise(
+          db.transaction("events", "readonly").objectStore("events").getAll()
+        );
+      })(),
+    ]);
+    const sleepTsOf = (n) => {
+      const t = new Date(n.actualSleepAt || n.phoneDownAt || "").getTime();
+      return isNaN(t) ? null : t;
+    };
+    const orphanMorning = mornings.filter((m) => {
+      const wake = new Date(m.wakeAt || "").getTime();
+      if (isNaN(wake)) return true;
+      return !nights.some((n) => {
+        const s = sleepTsOf(n);
+        return s != null && s <= wake && wake - s <= 18 * 3600 * 1000;
+      });
+    });
+    const nightIds = new Set(nights.map((n) => n.id));
+    const orphanEvent = events.filter(
+      (e) => e.sessionId != null && !nightIds.has(e.sessionId)
+    );
+    return { orphanMorning, orphanEvent };
+  },
+
+  /* 数据健康 summary（Data Check 展示用）：纯只读统计，不改任何数据。
+     返回 { total, completed, active, duplicateDates, suspiciousDates,
+            orphanMorning, orphanEvent, healthy } */
+  async dataHealthSummary() {
+    const nights = await this.getRecentNightSessions(100000);
+    const completedByDate = {};
+    let completed = 0, active = 0;
+    for (const n of nights) {
+      if (n.status === "completed") {
+        completed++;
+        completedByDate[n.date] = (completedByDate[n.date] || 0) + 1;
+      } else if (n.status === "active") {
+        active++;
+      }
+    }
+    const duplicateDateCount = Object.keys(completedByDate).filter(
+      (d) => completedByDate[d] > 1
+    ).length;
+    const suspicious = await this.findSuspiciousNightSessions({ staleHours: 36 });
+    const suspiciousDates = new Set(
+      suspicious
+        .filter((o) => o.issues.some((i) => i.code === "date_mismatch"))
+        .map((o) => o.date)
+    );
+    const orphans = await this.findOrphanRecords();
+    const healthy =
+      duplicateDateCount === 0 &&
+      suspiciousDates.size === 0 &&
+      orphans.orphanMorning.length === 0 &&
+      orphans.orphanEvent.length === 0;
+    return {
+      total: nights.length,
+      completed,
+      active,
+      duplicateDates: duplicateDateCount,
+      suspiciousDates: suspiciousDates.size,
+      orphanMorning: orphans.orphanMorning.length,
+      orphanEvent: orphans.orphanEvent.length,
+      healthy,
+    };
+  },
+
   /* 用户确认后的单条日期修复：把记录归到正确睡眠日，并标注 dateSource=migration。
      只改 date / dateSource / updatedAt，不动其它完成数据。 */
   async repairNightSessionDate(id, newDate, dateSource = "migration") {
@@ -526,10 +658,11 @@ const DB = {
       }
     }
 
-    for (const u of writes) {
-      await this.updateNightSession(u);
-      modified++;
-    }
+    /* 单事务提交全部迁移写入：要么全部写入、要么一条都不写，
+       中途崩溃 / 写入失败不会留下半迁移状态；失败后可安全重试
+       （幂等由 legacyMigrationVersion 标记保证，重复启动不会重复迁移）。 */
+    await this._commitMigrationWrites(writes);
+    modified = writes.length;
 
     // 数量守恒校验：迁移绝不能导致记录变多/变少
     const after = (await this.getRecentNightSessions(100000)).length;
@@ -545,6 +678,20 @@ const DB = {
     const report = { before, after, recovered, completed, active, needsReview, modified, ok: true };
     await this.setSetting("lastLegacyMigrationReport", report).catch(() => {});
     return report;
+  },
+
+  /* 迁移写入的单事务提交（独立成方法，便于故障注入测试「迁移中断」场景）。
+     保持原始 id / date / 时间戳；事务失败时整体回滚，绝不留下部分写入。 */
+  async _commitMigrationWrites(writes) {
+    if (!writes.length) return;
+    const db = await this.ready();
+    await new Promise((resolve, reject) => {
+      const t = db.transaction("nightSessions", "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error || new Error("迁移事务失败"));
+      t.onabort = () => reject(t.error || new Error("迁移事务被中止"));
+      writes.forEach((u) => t.objectStore("nightSessions").put(u));
+    });
   },
 
   /* 版本诊断信息（供设置页展示：App / SW / DB 版本对照） */

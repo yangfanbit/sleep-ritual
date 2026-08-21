@@ -421,6 +421,9 @@
 
   async function bindSleepButton() {
     $("#btn-sleep").addEventListener("click", async () => {
+      // 每次尝试先清掉上一次的保存错误提示，避免成功后残留旧错误
+      const ne = $("#night-save-error");
+      if (ne) ne.hidden = true;
       const firstReason = selectedReasons.length ? selectedReasons[0] : null;
       // 安全护栏：若当前会话不存在，或它已经是 completed（例如「返回流程」后再次就寝），
       // 则新建一条 active 会话 —— 绝不覆盖已完成的睡眠事实（状态机约束）。
@@ -456,6 +459,7 @@
         updatedAt: nowIso,
         dateSource: "auto",
       };
+      let saved = false;
       try {
         await DB.updateNightSession(session);
         await DB.addEvent({
@@ -470,9 +474,18 @@
           date: sd,
           payload: { source: currentSource },
         }).catch(() => {});
+        saved = true;
       } catch (e) {
+        // 写库失败：绝不假装成功。保留 active 会话（数据不丢），提示用户重试，
+        // 停留在睡前流程，不进入「晚安」页（否则用户误以为已记录）。
         console.error("保存失败", e);
+        if (ne) {
+          ne.hidden = false;
+          ne.textContent =
+            "这次就寝没能保存成功，请重新点「开始睡觉」重试。你的记录仍然保留。";
+        }
       }
+      if (!saved) return; // 未保存成功：不跳转、不假成功
       showGoodnight();
       tryOpenSleepTown();
     });
@@ -572,7 +585,10 @@
       dateSource: "auto",
     };
     try {
-      currentNightId = await DB.addNightSession(session);
+      // 经 addActiveNightSession：创建前双查 active + 短锁串行化 + 创建后确认，
+      // 防止并发 / 重复触发导致同日出现多条 active（P1 #7）。
+      const { id } = await DB.addActiveNightSession(session);
+      currentNightId = id;
       await DB.addEvent({
         sessionId: currentNightId,
         type: "night_started",
@@ -1205,6 +1221,8 @@
     $("#he-message").value = night.tonightMessage || "";
     selectedHistoryReasons = [...(night.reasons || [])];
     renderHistoryReasonChips();
+    const editErr = $("#history-edit-error");
+    if (editErr) editErr.hidden = true;
     $("#btn-history-save").textContent = "保存修改";
     $("#btn-history-cancel").hidden = false;
     const ed = $("#history-edit");
@@ -1220,6 +1238,8 @@
 
   function cancelHistoryEdit() {
     editingHistoryId = null;
+    const editErr = $("#history-edit-error");
+    if (editErr) { editErr.hidden = true; editErr.textContent = ""; }
     $("#he-date").value = "";
     $("#he-phone").value = "";
     $("#he-target").value = "23:30";
@@ -1235,6 +1255,8 @@
 
   async function saveHistoryEdit() {
     if (editingHistoryId == null) return;
+    const errEl = $("#history-edit-error");
+    if (errEl) errEl.hidden = true;
     const date = $("#he-date").value;
     const phoneInput = $("#he-phone").value;
     const target = $("#he-target").value;
@@ -1271,7 +1293,15 @@
     try {
       await DB.updateNightSession(updated);
     } catch (e) {
+      // 写库失败：绝不假装成功。编辑框保持打开、用户输入原样保留，
+      // 给出可见错误提示，允许用户直接重试。
       console.error("保存历史记录失败", e);
+      if (errEl) {
+        errEl.hidden = false;
+        errEl.textContent =
+          "保存失败，请稍后重试。你的修改暂未写入，请不要关闭页面。";
+      }
+      return;
     }
     cancelHistoryEdit();
     await renderHistory();
@@ -1282,7 +1312,10 @@
     try {
       await DB.deleteNightSession(night.id);
     } catch (e) {
+      // 删除失败：保持原记录、不刷新成「已删除」、给出明确错误
       console.error("删除历史记录失败", e);
+      alert("删除失败，记录仍然保留。\n请重试。");
+      return;
     }
     await renderHistory();
   }
@@ -1320,29 +1353,78 @@
         return;
       }
       lastReport = report;
+      const parts = [];
       if (!report.length) {
-        result.hidden = false;
-        result.innerHTML = `<p class="data-ok">✓ 检查完成，未发现异常记录。</p>`;
-        if (repairBtn) repairBtn.hidden = true;
-        return;
+        parts.push(`<p class="data-ok">✓ 检查完成，未发现异常记录。</p>`);
+      } else {
+        const mismatch = report.filter((o) =>
+          o.issues.some((i) => i.code === "date_mismatch")
+        );
+        const lines = report
+          .map((o) => {
+            const issues = o.issues
+              .map((i) => {
+                const extra = i.calculatedDate ? `（应归 ${escapeHTML(i.calculatedDate)}）` : "";
+                return `· ${escapeHTML(i.code)}${extra}：${escapeHTML(i.detail)}`;
+              })
+              .join("<br>");
+            return `<div class="data-row"><div class="data-id">记录 #${escapeHTML(o.id)} · ${escapeHTML(o.date)} · ${escapeHTML(o.status)}</div><div class="data-issues">${issues}</div></div>`;
+          })
+          .join("");
+        parts.push(`<p class="data-warn">发现 ${report.length} 条疑点：</p>${lines}`);
+        if (repairBtn) repairBtn.hidden = mismatch.length === 0;
       }
-      const mismatch = report.filter((o) =>
-        o.issues.some((i) => i.code === "date_mismatch")
-      );
-      const lines = report
-        .map((o) => {
-          const issues = o.issues
-            .map((i) => {
-              const extra = i.calculatedDate ? `（应归 ${escapeHTML(i.calculatedDate)}）` : "";
-              return `· ${escapeHTML(i.code)}${extra}：${escapeHTML(i.detail)}`;
-            })
-            .join("<br>");
-          return `<div class="data-row"><div class="data-id">记录 #${escapeHTML(o.id)} · ${escapeHTML(o.date)} · ${escapeHTML(o.status)}</div><div class="data-issues">${issues}</div></div>`;
-        })
-        .join("");
+
+      // 孤儿数据诊断（P1 #6：只检测、不自动修复、仅展示）
+      let orphans = { orphanMorning: [], orphanEvent: [] };
+      try {
+        orphans = await DB.findOrphanRecords();
+      } catch (e) {
+        console.error("孤儿数据检测失败", e);
+      }
+      const orphanMorning = orphans.orphanMorning || [];
+      const orphanEvent = orphans.orphanEvent || [];
+      if (orphanMorning.length || orphanEvent.length) {
+        const om = orphanMorning.length
+          ? `<p class="data-issues">· 无法关联到夜间记录的 Morning 数据 ${orphanMorning.length} 条（可能为历史数据迁移遗留，建议先确认、不要自动删除）</p>`
+          : "";
+        const oe = orphanEvent.length
+          ? `<p class="data-issues">· 指向已不存在夜间记录的 Event ${orphanEvent.length} 条（append-only 日志，可保留用于追溯）</p>`
+          : "";
+        parts.push(
+          `<p class="data-warn">发现 ${orphanMorning.length + orphanEvent.length} 条孤儿数据：</p>${om}${oe}`
+        );
+      } else {
+        parts.push(`<p class="data-ok">孤儿数据：无。</p>`);
+      }
+
+      // 长期一致性统计（P2 #11：非破坏性只读 summary，不改动任何数据）
+      let health = null;
+      try {
+        health = await DB.dataHealthSummary();
+      } catch (e) {
+        console.error("数据健康统计失败", e);
+      }
+      if (health) {
+        const status = health.healthy ? "正常" : "需要检查";
+        const sumCls = health.healthy ? "data-summary" : "data-summary is-warn";
+        const li = (label, val) => `<li>${label}：${val}</li>`;
+        parts.push(
+          `<div class="${sumCls}"><div class="data-summary-title">数据状态：${status}</div>` +
+          `<ul class="data-summary-list">` +
+          li("Night Sessions", health.total) +
+          li("Completed", health.completed) +
+          li("Active", health.active) +
+          li("Duplicate 日期", health.duplicateDates) +
+          li("可疑日期", health.suspiciousDates) +
+          li("孤儿 Morning", health.orphanMorning) +
+          li("孤儿 Event", health.orphanEvent) +
+          `</ul></div>`
+        );
+      }
+
       result.hidden = false;
-      result.innerHTML = `<p class="data-warn">发现 ${report.length} 条疑点：</p>${lines}`;
-      if (repairBtn) repairBtn.hidden = mismatch.length === 0;
+      result.innerHTML = parts.join("");
       // 重复记录：提供安全的解决流程（保留 A / 保留 B / 取消）
       renderDuplicateResolution(report);
     });
@@ -1358,7 +1440,9 @@
         for (const o of mismatch) {
           const issue = o.issues.find((i) => i.code === "date_mismatch");
           if (issue && issue.calculatedDate) {
-            await DB.repairNightSessionDate(o.id, issue.calculatedDate, "migration").catch(() => {});
+            await DB.repairNightSessionDate(o.id, issue.calculatedDate, "migration").catch((e) =>
+              console.error("日期修复失败", e)
+            );
           }
         }
         // 修正后刷新扫描结果与 History
@@ -1584,7 +1668,12 @@
       enBox.type = "checkbox";
       enBox.checked = item.enabled !== false;
       enBox.addEventListener("change", async () => {
-        await DB.updateContent(Object.assign({}, item, { enabled: enBox.checked }));
+        try {
+          await DB.updateContent(Object.assign({}, item, { enabled: enBox.checked }));
+        } catch (e) {
+          // 写库失败：重新渲染回退到 DB 中的真实状态，绝不保留错误的勾选视觉
+          console.error("内容启停更新失败", e);
+        }
         renderContentList();
       });
       en.appendChild(enBox);
@@ -1617,6 +1706,8 @@
 
   function startEditContent(item) {
     editingContentId = item.id;
+    const ceErr = $("#content-editor-error");
+    if (ceErr) { ceErr.hidden = true; ceErr.textContent = ""; }
     $("#content-type").value = item.type;
     $("#content-text").value = item.text;
     $("#content-source").value = item.source || "";
@@ -1635,6 +1726,8 @@
 
   function cancelEditContent() {
     editingContentId = null;
+    const ceErr = $("#content-editor-error");
+    if (ceErr) { ceErr.hidden = true; ceErr.textContent = ""; }
     $("#content-type").value = "quote";
     $("#content-text").value = "";
     $("#content-source").value = "";
@@ -1702,14 +1795,24 @@
         weight: Number($("#content-weight").value) || 1,
         tags,
       };
-      if (editingContentId) {
-        const orig = (await DB.getAllContent()).find((c) => c.id === editingContentId);
-        await DB.updateContent(Object.assign({}, orig, base, { id: editingContentId }));
-      } else {
-        await DB.addContent(base);
+      try {
+        if (editingContentId) {
+          const orig = (await DB.getAllContent()).find((c) => c.id === editingContentId);
+          await DB.updateContent(Object.assign({}, orig, base, { id: editingContentId }));
+        } else {
+          await DB.addContent(base);
+        }
+        cancelEditContent();
+        renderContentList();
+      } catch (e) {
+        // 写库失败：不关闭编辑框、不丢失输入，等待用户重试（绝不假成功）
+        console.error("内容保存失败，修改未写入", e);
+        const edErr = $("#content-editor-error");
+        if (edErr) {
+          edErr.hidden = false;
+          edErr.textContent = "内容保存失败，请稍后重试。你的修改暂未写入。";
+        }
       }
-      cancelEditContent();
-      renderContentList();
     });
 
     $("#btn-content-cancel").addEventListener("click", cancelEditContent);
@@ -1861,10 +1964,16 @@
 
     $("#btn-wipe").addEventListener("click", async () => {
       if (!confirm("确定清空所有数据？包括记录和内容库，无法恢复。")) return;
-      await DB.wipeAll();
-      await DB.seedContentIfEmpty();
-      await renderSettings();
-      alert("已清空。");
+      try {
+        await DB.wipeAll();
+        await DB.seedContentIfEmpty();
+        await renderSettings();
+        alert("已清空。");
+      } catch (e) {
+        // 清空失败：当前数据原样保留，明确告知，不假装已清空
+        console.error("清空数据失败", e);
+        alert("清空失败：" + ((e && e.message) || e) + "。当前数据未改动。");
+      }
     });
   }
 
