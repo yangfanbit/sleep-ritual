@@ -1437,17 +1437,40 @@
         if (!mismatch.length) return;
         if (!confirm(`将修正 ${mismatch.length} 条高置信度的日期错位（按放下手机时间重新归日），并标记为 migration。是否继续？`))
           return;
+
+        // 逐条修复并分别捕获失败：成功记录保持标记，失败记录绝不标记（DB 抛错不写库）
+        let okCount = 0;
+        let failCount = 0;
         for (const o of mismatch) {
           const issue = o.issues.find((i) => i.code === "date_mismatch");
-          if (issue && issue.calculatedDate) {
-            await DB.repairNightSessionDate(o.id, issue.calculatedDate, "migration").catch((e) =>
-              console.error("日期修复失败", e)
-            );
+          if (!issue || !issue.calculatedDate) continue;
+          try {
+            await DB.repairNightSessionDate(o.id, issue.calculatedDate, "migration");
+            okCount++;
+          } catch (e) {
+            // 仅记录，不吞掉：失败记录未被标记、未被改动，交由下方明确反馈
+            console.error("日期修复失败", e);
+            failCount++;
           }
         }
-        // 修正后刷新扫描结果与 History
-        checkBtn.click();
-        await renderHistory().catch(() => {});
+
+        const errEl = $("#data-check-error");
+        if (failCount === 0) {
+          // 全部成功：清除错误提示，正常重新扫描
+          if (errEl) errEl.hidden = true;
+          checkBtn.click();
+          await renderHistory().catch(() => {});
+        } else {
+          // 部分 / 全部失败：明确反馈，绝不假成功；不自动重扫，由用户重新检查。
+          // 已成功的记录已标记（dateSource=migration）并保留；失败的保持原状、未标记。
+          if (errEl) {
+            errEl.hidden = false;
+            errEl.textContent =
+              okCount === 0
+                ? `修复失败 ${failCount} 条，记录均保留未改动，请稍后重试。`
+                : `部分修复失败（成功 ${okCount} 条，失败 ${failCount} 条），请重新检查。`;
+          }
+        }
       });
     }
   }

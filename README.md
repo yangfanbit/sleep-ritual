@@ -93,7 +93,7 @@ npm run test:smoke  # jsdom 集成 / 冒烟套件（自动起服务器）
 | Unit | `npm run test:unit` | DateUtils 边界、DB 数据层、迁移、Analytics、ContentSelector、SW 缓存静态分析、Restore 校验、长期回归门禁、30 天趋势、Duplicate 解决 |
 | Integration / Smoke | `npm run test:smoke` | 页面加载、路由（深链）、PWA 壳、核心按钮、Night→Morning 闭环、History（含编辑/删除异常）、XSS 渲染、Morning 失败反馈 |
 
-全量 `npm test` 共 17 套件 / 433 项断言（Unit 243 + Smoke 190），详见下表。
+全量 `npm test` 共 17 套件 / 441 项断言（Unit 243 + Smoke 198），详见下表。
 
 套件明细（`npm test` 全量）：
 
@@ -115,7 +115,7 @@ npm run test:smoke  # jsdom 集成 / 冒烟套件（自动起服务器）
 | `tests/morning.test.js` | 13 | 早晨保存成功 / 失败真实反馈 / 重试 / 不重复 | Smoke |
 | `tests/ui-smoke.test.js` | 26 | UI 冒烟：视图/按钮/容错/配对 | Smoke |
 | `tests/architecture.test.js` | 102 | 架构级：迁移/events/ContentSelector/Analytics/深链/重入/SW 壳/编辑删除/数据自检 | Smoke |
-| `tests/history-error.test.js` | 16 | History 编辑/删除失败注入：编辑框保持/输入保留/可见错误/记录未变；删除失败保留记录；快速双击不重复；读取失败优雅降级 | Smoke |
+| `tests/history-error.test.js` | 24 | History 编辑/删除失败注入：编辑框保持/输入保留/可见错误/记录未变；删除失败保留记录；快速双击不重复；读取失败优雅降级；Data Check Repair 失败不假成功（记录不标记/不改日期/可见错误）+ Repair 成功改日期并标记 | Smoke |
 
 CI（`.github/workflows/test.yml`）：任何 push 到 `main` 或 pull_request 都会自动 `npm ci` + `npm test`，全绿才视为可部署。
 

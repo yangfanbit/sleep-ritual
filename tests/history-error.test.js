@@ -183,6 +183,53 @@ const waitFor = async (w, fn, timeout = 8000) => {
   const listCount = w.document.querySelectorAll("#history-list .history-item").length;
   check("history recovers after read restored", listCount >= 1);
 
+  /* ---------- P1：Data Check Repair 失败明确反馈（不假成功） ---------- */
+  // 注入一条会触发 date_mismatch 的记录：phoneDownAt 归 2026-08-20，但 date 写成 2026-08-19
+  await DB.addNightSession({
+    date: "2026-08-19",
+    status: "completed",
+    phoneDownAt: "2026-08-20T23:30:00",
+    completedAt: "2026-08-20T23:35:00",
+  });
+  const checkBtn2 = w.document.querySelector("#btn-data-check");
+  const repairBtn2 = w.document.querySelector("#btn-data-repair");
+  check("data-check buttons present", !!checkBtn2 && !!repairBtn2);
+  checkBtn2.click();
+  await wait(450); // 等待扫描完成（lastReport 填充）
+  const mismatchScan = await DB.findSuspiciousNightSessions({ staleHours: 36 });
+  check(
+    "seeded record flagged as date_mismatch (repair target)",
+    mismatchScan.some((o) => o.issues.some((i) => i.code === "date_mismatch"))
+  );
+
+  // 失败注入：repairNightSessionDate 抛错
+  const origRepair = DB.repairNightSessionDate.bind(DB);
+  DB.repairNightSessionDate = async () => {
+    throw new Error("forced repair failure");
+  };
+  repairBtn2.click();
+  await wait(500);
+  const afterFailRepair = await DB.getRecentNightSessions(100);
+  const failedRec = afterFailRepair.find((n) => n.date === "2026-08-19");
+  check("repair failure does NOT modify record date", !!failedRec && failedRec.date === "2026-08-19");
+  check("repair failure does NOT mark record as repaired", !!failedRec && failedRec.dateSource !== "migration");
+  const dcrErr = w.document.querySelector("#data-check-error");
+  check(
+    "repair failure shows visible error (no fake success)",
+    dcrErr && dcrErr.hidden === false && /修复失败/.test(dcrErr.textContent)
+  );
+  DB.repairNightSessionDate = origRepair;
+
+  // 成功路径：真实修复应改日期并标记，且清除错误提示
+  repairBtn2.click();
+  await wait(500);
+  const afterOk = await DB.getRecentNightSessions(100);
+  const fixedRec = afterOk.find((n) => n.phoneDownAt === "2026-08-20T23:30:00");
+  check("repair success updates date to calculated date", !!fixedRec && fixedRec.date === "2026-08-20");
+  check("repair success marks dateSource=migration", !!fixedRec && fixedRec.dateSource === "migration");
+  const dcrErr2 = w.document.querySelector("#data-check-error");
+  check("repair success clears error (no stale failure)", dcrErr2 && dcrErr2.hidden === true);
+
   await DB.wipeAll();
 
   /* ============ 汇总 ============ */
