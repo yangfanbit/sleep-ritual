@@ -140,9 +140,11 @@ function completedNight(date, overrides = {}) {
   await DB.wipeAll();
 
   /* ===== 6. Data Health：构造错误数据 → health check 能发现 ===== */
-  // 故意构造 phoneDownAt 的日期与记录 date 不一致 → 触发 date_mismatch
+  // 使用明确跨过 04:00 cutoff 的时间，避免 GitHub Actions（UTC）时区导致测试失效：
+  // 2026-08-16T23:30:00.000Z 在任意时区（UTC / UTC+8 / UTC+9 / UTC-12 等）都只会落在
+  // 2026-08-16 或 2026-08-17，绝不可能是 2026-08-15，因此必然与 date=2026-08-15 产生 date_mismatch。
   await DB.addNightSession(
-    completedNight("2026-08-15", { phoneDownAt: "2026-08-16T01:30:00.000Z" })
+    completedNight("2026-08-15", { phoneDownAt: "2026-08-16T23:30:00.000Z" })
   );
   const suspicious = await DB.findSuspiciousNightSessions();
   const hasMismatch = suspicious.some((s) =>
